@@ -36,6 +36,7 @@ let closeRequestPending = false
 const activeJobs = new Map<string, AbortController>()
 const EXTERNAL_URLS: Readonly<Record<ExternalLinkTarget, string>> = {
   repository: 'https://github.com/buildergarlic/ginuni',
+  sponsor: 'https://github.com/sponsors/buildergarlic',
   threads: 'https://www.threads.com/@builder.garlic',
   email: 'mailto:contact@ax4u.kr',
   kakao: 'https://open.kakao.com/o/s7eFbFIi'
@@ -212,9 +213,11 @@ async function createWindow(): Promise<void> {
   closeRequestPending = false
   mainWindow = new BrowserWindow({
     width: 1440,
-    height: 920,
+    height: 960,
     minWidth: 1100,
     minHeight: 720,
+    useContentSize: true,
+    autoHideMenuBar: true,
     show: false,
     backgroundColor: '#f6f4ef',
     webPreferences: {

@@ -2,7 +2,7 @@ export type SourceKind = 'local' | 'youtube'
 export type ScriptRowKind = 'dialogue' | 'descriptionGap'
 export type ProjectStatus = 'draft' | 'processing' | 'review' | 'exported' | 'error'
 export type TranscriptionEngine = 'local' | 'openai'
-export type ExternalLinkTarget = 'repository' | 'threads' | 'email' | 'kakao'
+export type ExternalLinkTarget = 'repository' | 'sponsor' | 'threads' | 'email' | 'kakao'
 export type UpdateState = 'disabled' | 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
 
 export interface UpdateStatus {

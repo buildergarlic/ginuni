@@ -31,7 +31,7 @@ AI 결과는 검수 가능한 초안입니다. 중요한 납품 전에는 반드
 5. 영상과 표를 함께 보며 대사·화자·시작·종료를 수정합니다.
 6. **HWPX 내보내기**를 눌러 저장 폴더를 선택합니다.
 
-앱의 **About GiNuNi**에서 버전·자동 업데이트·BuilderGarlic 연락처·GitHub 저장소를 확인할 수 있고, **개발자 후원** 메뉴에서 Sponsors 등록 준비 상태와 GitHub 오류 제보 경로를 확인할 수 있습니다. 결제 버튼은 실제 Sponsors 승인 후 활성화합니다.
+앱의 **About GiNuNi**에서 버전·자동 업데이트·BuilderGarlic 연락처·GitHub 저장소를 확인할 수 있고, **개발자 후원** 메뉴에서 [BuilderGarlic GitHub Sponsors](https://github.com/sponsors/buildergarlic) 후원 단계를 선택할 수 있습니다.
 
 프로젝트는 Windows 문서 폴더의 `화면해설 대본 도구\Projects`에 자동 저장됩니다. HWPX는 같은 제목이 있으면 `V01`, `V02`처럼 새 버전으로 저장되고 기존 파일을 덮어쓰지 않습니다.
 
