@@ -50,6 +50,7 @@
     "appId": "kr.ginuni.screenDescriptionScriptMaker",
     "productName": "화면해설 대본 도구",
     "asar": true,
+    "forceCodeSigning": true,
     "directories": {
       "output": "release"
     },

@@ -32,7 +32,39 @@
 
 ## 코드 서명
 
-베타 설치본은 인증서가 없으면 Windows SmartScreen 경고가 나타날 수 있습니다. 공개 `v1.0.0` 전에 코드 서명 인증서를 마련하고 GitHub Secrets의 `CSC_LINK`, `CSC_KEY_PASSWORD`로 서명합니다. 인증서가 없을 때 공개판을 배포하지 않습니다.
+`v0.4.0-beta.2`는 인증서 발급 전 설치본이라 Windows SmartScreen 경고가 나타날 수 있습니다. 이후 태그 릴리스는 신뢰할 수 있는 Authenticode 인증서가 없으면 빌드 단계에서 실패하도록 설정되어 있습니다. 자체 서명 인증서는 일반 사용자 PC에서 신뢰되지 않으므로 공개 배포에 사용하지 않습니다.
+
+### 인증서 준비
+
+1. 신원 확인을 거치는 공개 신뢰 코드 서명 인증서 또는 CI에서 사용할 수 있는 코드 서명 서비스를 마련합니다.
+2. `.pfx`/`.p12` 파일로 제공되는 인증서는 암호로 보호하고 Git 저장소와 공유 폴더에 넣지 않습니다.
+3. 인증서의 게시자 이름, 유효기간, 코드 서명 용도를 확인합니다.
+
+Microsoft Store의 MSIX 배포는 Microsoft가 서명하며, GitHub Releases에서 EXE를 직접 배포할 때는 별도의 Authenticode 서명이 필요합니다. Microsoft Artifact Signing이나 하드웨어·클라우드 키 방식 인증서를 선택하면 현재 PFX 방식 대신 해당 서비스용 GitHub Actions 연동을 별도로 구성해야 합니다.
+
+### PFX 인증서를 GitHub Actions에 등록
+
+PowerShell에서 실제 인증서 경로를 사용해 다음 명령을 실행합니다. Base64 문자열과 암호는 화면이나 로그에 출력하지 않습니다.
+
+```powershell
+$certificatePath = 'C:\안전한 위치\buildergarlic-code-signing.pfx'
+[Convert]::ToBase64String([IO.File]::ReadAllBytes($certificatePath)) | gh secret set WIN_CSC_LINK --repo buildergarlic/ginuni
+gh secret set WIN_CSC_KEY_PASSWORD --repo buildergarlic/ginuni
+```
+
+두 번째 명령이 기다리면 인증서 암호를 입력하고 Enter를 누릅니다. 등록 여부는 값이 아니라 이름만 확인합니다.
+
+```powershell
+gh secret list --repo buildergarlic/ginuni
+```
+
+필수 비밀값은 `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`입니다. `package.json`의 `forceCodeSigning`이 인증서 누락 시 빌드를 중단하고, 릴리스 워크플로가 설치 프로그램과 패키징된 앱의 Authenticode 상태가 `Valid`인지 다시 검사한 뒤에만 GitHub Release를 게시합니다.
+
+서명에는 SHA-256과 타임스탬프를 사용해야 인증서가 만료된 뒤에도 서명 시점의 유효성을 검증할 수 있습니다. 실제 인증서 등록 후 테스트 태그로 릴리스하고, 내려받은 설치본의 **속성 → 디지털 서명**과 다음 명령 결과를 확인합니다.
+
+```powershell
+Get-AuthenticodeSignature '.\ScreenDescriptionScriptMaker-X.Y.Z-Setup.exe' | Format-List Status,StatusMessage,SignerCertificate,TimeStamperCertificate
+```
 
 ## 파일럿 통과 기준
 
