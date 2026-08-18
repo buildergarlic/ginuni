@@ -12,14 +12,25 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Require Windows code-signing secrets
+      - name: Determine Windows signing mode
+        id: signing
         shell: pwsh
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK)) { throw "Missing WIN_CSC_LINK GitHub secret." }
-          if ([string]::IsNullOrWhiteSpace($env:WIN_CSC_KEY_PASSWORD)) { throw "Missing WIN_CSC_KEY_PASSWORD GitHub secret." }
+          $hasLink = -not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:WIN_CSC_KEY_PASSWORD)
+          if ($hasLink -ne $hasPassword) {
+            throw "WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD must either both be set or both be empty."
+          }
+          if ($hasLink) {
+            "enabled=true" >> $env:GITHUB_OUTPUT
+            Write-Output "A trusted certificate is configured; this release will be signed."
+          } else {
+            "enabled=false" >> $env:GITHUB_OUTPUT
+            Write-Warning "No code-signing certificate is configured; publishing an unsigned beta release."
+          }
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -41,6 +52,7 @@ jobs:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
       - name: Verify Authenticode signatures
+        if: steps.signing.outputs.enabled == 'true'
         shell: pwsh
         run: |
           $targets = @()
@@ -53,6 +65,21 @@ jobs:
               throw "Invalid Authenticode signature: $($target.FullName) [$($signature.Status)]"
             }
             Write-Output "Verified signature: $($target.Name) / $($signature.SignerCertificate.Subject)"
+          }
+      - name: Verify unsigned beta artifacts
+        if: steps.signing.outputs.enabled != 'true'
+        shell: pwsh
+        run: |
+          $targets = @()
+          $targets += Get-ChildItem -Path release -File -Filter '*-Setup.exe'
+          $targets += Get-ChildItem -Path release\win-unpacked -File -Filter '*.exe'
+          if ($targets.Count -lt 2) { throw "Installer or packaged app executable was not found." }
+          foreach ($target in $targets) {
+            $signature = Get-AuthenticodeSignature -FilePath $target.FullName
+            if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::NotSigned) {
+              throw "Expected an unsigned beta artifact: $($target.FullName) [$($signature.Status)]"
+            }
+            Write-Warning "Verified unsigned beta artifact: $($target.Name)"
           }
       - name: Create checksums
         shell: powershell
