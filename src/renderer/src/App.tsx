@@ -438,10 +438,10 @@ function SupportScreen({ bootstrap, onBack, onAbout }: {
         <h1>개발자 후원</h1>
         <p className="info-lead">후원금은 한국어 음성인식 품질 개선, 한컴오피스 호환성 테스트, Windows 코드 서명과 배포 유지에 사용됩니다.</p>
         <div className="support-highlight">
-          <span>후원 채널 준비 중</span>
-          <h2>GitHub Sponsors 등록 진행 중</h2>
-          <p>현재는 결제 가능한 후원 페이지가 아직 열리지 않았습니다. GitHub Sponsors 승인이 끝나는 즉시 이 메뉴에서 후원할 수 있도록 연결하겠습니다.</p>
-          <button className="sponsor-button" disabled>♥ GitHub Sponsors 준비 중</button>
+          <span>GITHUB SPONSORS</span>
+          <h2>GiNuNi 개발을 후원해 주세요</h2>
+          <p>GitHub Sponsors에서 원하는 후원 단계를 선택할 수 있습니다. 지속적인 후원은 음성인식 품질 개선과 안정적인 Windows 배포에 큰 도움이 됩니다.</p>
+          <button className="sponsor-button" onClick={() => void window.screenScript.openExternal('sponsor')}>♥ GitHub Sponsors에서 후원하기</button>
         </div>
         <div className="support-note">
           <strong>비금전 후원도 큰 힘이 됩니다.</strong>

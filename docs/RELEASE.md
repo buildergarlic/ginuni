@@ -25,7 +25,7 @@
 
 ## 공개 전환 체크리스트
 
-- GitHub Sponsors 등록을 완료하고 BuilderGarlic 계정의 실제 후원 금액 선택 화면을 확인한 뒤 `.github/FUNDING.yml`과 앱의 후원 CTA를 활성화합니다.
+- GitHub Sponsors 주소, `.github/FUNDING.yml`, 앱의 후원 CTA가 모두 `buildergarlic` 계정을 가리키는지 확인합니다.
 - 소스를 공개할 경우 MIT, Apache-2.0 등 배포 범위에 맞는 라이선스를 소유자가 선택하고 `LICENSE`를 추가합니다. 현재 `UNLICENSED`를 임의로 변경하지 않습니다.
 - 저장소 공개 전 API 키, 개인 영상 경로, 사용자 프로젝트, 민감한 HWPX 내용이 Git 이력에 없는지 검사합니다.
 - Windows 코드 서명 인증서를 적용한 후 공개 Releases에 설치본과 SHA-256을 게시합니다.

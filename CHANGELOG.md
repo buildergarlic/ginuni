@@ -2,7 +2,15 @@
 
 이 프로젝트는 [Semantic Versioning](https://semver.org/)을 따릅니다.
 
-## [Unreleased]
+## [0.4.0-beta.3] - 2026-08-19
+
+### 추가
+
+- 앱의 개발자 후원 메뉴에서 활성화된 BuilderGarlic GitHub Sponsors 페이지로 바로 연결
+
+### 수정
+
+- 초기 창 크기를 프레임이 아닌 콘텐츠 영역 기준으로 적용하고 메뉴 바를 자동 숨겨 첫 화면의 불필요한 세로 스크롤 제거
 
 ### 보안
 
