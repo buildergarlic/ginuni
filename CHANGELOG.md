@@ -2,13 +2,17 @@
 
 이 프로젝트는 [Semantic Versioning](https://semver.org/)을 따릅니다.
 
-## [0.4.0-beta.1] - 2026-08-19
+## [0.4.0-beta.2] - 2026-08-19
 
 ### 추가
 
 - 공개 GitHub Releases를 시작 시 확인하고 새 설치본을 자동 다운로드하는 Windows 자동 업데이트
 - About의 BuilderGarlic, Threads, 프로그램 문의 이메일, 강의·개발 협업·커피챗 카카오 오픈채팅 정보
 - 태그와 버전 일치 검사, `latest.yml`·블록맵·SHA-256을 포함한 GitHub Actions 릴리스 자동화
+
+### 수정
+
+- Windows PowerShell 5.1에서 릴리스 태그 검사가 인코딩 오류 없이 실행되도록 오류 문구 정리
 
 ### 변경
 

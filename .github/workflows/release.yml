@@ -26,7 +26,7 @@ jobs:
         shell: powershell
         run: |
           $packageVersion = (Get-Content package.json | ConvertFrom-Json).version
-          if ("v$packageVersion" -ne "${{ github.ref_name }}") { throw "태그와 package.json 버전이 일치하지 않습니다." }
+          if ("v$packageVersion" -ne "${{ github.ref_name }}") { throw "Git tag does not match package.json version." }
       - run: npm run verify
       - run: npx electron-builder --win nsis --publish never
         env:
