@@ -49,6 +49,37 @@ function removeLayoutCaches(document: XmlDocument): void {
   nodes.forEach((cache) => cache.parentNode?.removeChild(cache))
 }
 
+function ensurePageNumber(document: XmlDocument): void {
+  const sectionProperties = firstElement(document, 'hp:secPr')
+  const visibility = sectionProperties.getElementsByTagName('hp:visibility').item(0)
+  if (visibility) visibility.setAttribute('hideFirstPageNum', '0')
+
+  const existingPageNumber = document.getElementsByTagName('hp:pageNum').item(0)
+  if (existingPageNumber) {
+    existingPageNumber.setAttribute('pos', 'BOTTOM_CENTER')
+    existingPageNumber.setAttribute('formatType', 'DIGIT')
+    existingPageNumber.setAttribute('sideChar', '-')
+    return
+  }
+
+  const sectionRun = sectionProperties.parentNode
+  const paragraph = sectionRun?.parentNode
+  if (!sectionRun || sectionRun.nodeType !== 1 || (sectionRun as XmlElement).tagName !== 'hp:run' || !paragraph) {
+    throw new Error('HWPX 템플릿의 구역 속성 문단을 찾을 수 없습니다.')
+  }
+
+  const pageNumberRun = document.createElement('hp:run')
+  pageNumberRun.setAttribute('charPrIDRef', '1')
+  const control = document.createElement('hp:ctrl')
+  const pageNumber = document.createElement('hp:pageNum')
+  pageNumber.setAttribute('pos', 'BOTTOM_CENTER')
+  pageNumber.setAttribute('formatType', 'DIGIT')
+  pageNumber.setAttribute('sideChar', '-')
+  control.appendChild(pageNumber)
+  pageNumberRun.appendChild(control)
+  paragraph.insertBefore(pageNumberRun, sectionRun.nextSibling)
+}
+
 function estimateDialogueHeight(content: string): number {
   let units = 0
   let lines = 1
@@ -93,6 +124,7 @@ function updateSection(sectionXml: string, title: string, rows: ScriptRow[]): st
   if (parseError) throw new Error('HWPX 본문 XML을 읽을 수 없습니다.')
 
   firstElement(document, 'hp:t').textContent = `화면해설대본 - ${title}`
+  ensurePageNumber(document)
   const table = firstElement(document, 'hp:tbl')
   const originalRows = directChildren(table, 'hp:tr')
   if (originalRows.length < 3) throw new Error('HWPX 템플릿 표에는 머리글·해설·대사 기본 행이 필요합니다.')

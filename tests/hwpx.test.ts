@@ -36,6 +36,9 @@ describe('HWPX export', () => {
     expect(section).toContain('테스트 &amp; 제목')
     expect(section).toContain('&lt;안녕&gt; &amp; 반가워요')
     expect(section).not.toContain('hp:linesegarray')
+    expect(section).toContain('<hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="-"/>')
+    expect(section).toContain('hideFirstPageNum="0"')
+    expect(section.match(/<hp:pageNum\b/g)).toHaveLength(1)
     const content = entries.get('Contents/content.hpf')?.toString('utf8') ?? ''
     expect(content).toContain('name="creator" content="text">화면해설 대본 도구</opf:meta>')
     expect(content).not.toContain('content="화면해설 대본 도구"')
@@ -57,6 +60,29 @@ describe('HWPX export', () => {
     const entries = await readZipEntries(outputPath)
     const section = entries.get('Contents/section0.xml')?.toString('utf8') ?? ''
     expect(section).toContain('첫 줄<hp:lineBreak/>[화자1] 둘째 줄')
+  })
+
+  it('이미 쪽번호가 있는 HWPX를 다시 사용해도 쪽번호를 중복 생성하지 않는다', async () => {
+    tempDirectory = await mkdtemp(join(tmpdir(), 'screen-script-page-number-'))
+    const firstOutputPath = join(tempDirectory, 'first.hwpx')
+    const secondOutputPath = join(tempDirectory, 'second.hwpx')
+    const rows: ScriptRow[] = [
+      { id: 'g', kind: 'descriptionGap', startMs: 0, endMs: 3_000, speakers: [], content: '', sourceSegmentIds: [], reviewed: false },
+      { id: 'd', kind: 'dialogue', startMs: 3_000, endMs: 5_000, speakers: [], content: '대사', sourceSegmentIds: ['s1'], reviewed: false }
+    ]
+
+    await buildHwpx({
+      templatePath: resolve('resources/templates/screen-description-template.hwpx'),
+      outputPath: firstOutputPath,
+      title: '첫 내보내기',
+      rows
+    })
+    await buildHwpx({ templatePath: firstOutputPath, outputPath: secondOutputPath, title: '두 번째 내보내기', rows })
+
+    const entries = await readZipEntries(secondOutputPath)
+    const section = entries.get('Contents/section0.xml')?.toString('utf8') ?? ''
+    expect(section.match(/<hp:pageNum\b/g)).toHaveLength(1)
+    expect(section).toContain('<hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="-"/>')
   })
 
   it('화자 분리 없는 로컬 대사는 HWPX와 미리보기에 화자 표기 없이 기록한다', async () => {
