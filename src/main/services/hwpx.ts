@@ -1,4 +1,4 @@
-import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
+import { DOMParser, XMLSerializer, type Document as XmlDocument, type Element as XmlElement } from '@xmldom/xmldom'
 import { access, mkdir } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { DESCRIPTION_TEXT } from '@shared/constants'
@@ -11,22 +11,22 @@ const CONTENT_PATH = 'Contents/content.hpf'
 const PREVIEW_TEXT_PATH = 'Preview/PrvText.txt'
 const PREVIEW_IMAGE_PATH = 'Preview/PrvImage.png'
 
-function directChildren(element: Element, tagName: string): Element[] {
-  const result: Element[] = []
+function directChildren(element: XmlElement, tagName: string): XmlElement[] {
+  const result: XmlElement[] = []
   for (let index = 0; index < element.childNodes.length; index += 1) {
     const node = element.childNodes.item(index)
-    if (node?.nodeType === 1 && (node as Element).tagName === tagName) result.push(node as Element)
+    if (node?.nodeType === 1 && (node as XmlElement).tagName === tagName) result.push(node as XmlElement)
   }
   return result
 }
 
-function firstElement(root: Document | Element, tagName: string): Element {
+function firstElement(root: XmlDocument | XmlElement, tagName: string): XmlElement {
   const element = root.getElementsByTagName(tagName).item(0)
   if (!element) throw new Error(`HWPX 템플릿에 ${tagName} 요소가 없습니다.`)
   return element
 }
 
-function setCellText(cell: Element, value: string): void {
+function setCellText(cell: XmlElement, value: string): void {
   const textNodes = cell.getElementsByTagName('hp:t')
   if (textNodes.length === 0) throw new Error('HWPX 표 셀에 텍스트 요소가 없습니다.')
   const firstText = textNodes.item(0)!
@@ -39,9 +39,9 @@ function setCellText(cell: Element, value: string): void {
   for (let index = 1; index < textNodes.length; index += 1) textNodes.item(index)!.textContent = ''
 }
 
-function removeLayoutCaches(document: Document): void {
+function removeLayoutCaches(document: XmlDocument): void {
   const caches = document.getElementsByTagName('hp:linesegarray')
-  const nodes: Element[] = []
+  const nodes: XmlElement[] = []
   for (let index = 0; index < caches.length; index += 1) {
     const cache = caches.item(index)
     if (cache) nodes.push(cache)
@@ -67,7 +67,7 @@ function estimateDialogueHeight(content: string): number {
   return 2469 + Math.max(0, lines - 1) * 1903
 }
 
-function setRowGeometry(row: Element, rowIndex: number, height: number): void {
+function setRowGeometry(row: XmlElement, rowIndex: number, height: number): void {
   const cells = directChildren(row, 'hp:tc')
   cells.forEach((cell) => {
     const address = firstElement(cell, 'hp:cellAddr')
@@ -101,13 +101,13 @@ function updateSection(sectionXml: string, title: string, rows: ScriptRow[]): st
   const dialogueTemplate = originalRows[2]
 
   originalRows.forEach((row) => table.removeChild(row))
-  const header = headerTemplate.cloneNode(true) as Element
+  const header = headerTemplate.cloneNode(true) as XmlElement
   setRowGeometry(header, 0, 2469)
   table.appendChild(header)
 
   let totalHeight = 2469
   rows.forEach((scriptRow, index) => {
-    const row = (scriptRow.kind === 'dialogue' ? dialogueTemplate : gapTemplate).cloneNode(true) as Element
+    const row = (scriptRow.kind === 'dialogue' ? dialogueTemplate : gapTemplate).cloneNode(true) as XmlElement
     const values = rowValues(scriptRow)
     const cells = directChildren(row, 'hp:tc')
     if (cells.length !== 5) throw new Error('HWPX 표의 열 개수가 5개가 아닙니다.')
