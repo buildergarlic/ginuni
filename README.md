@@ -4,7 +4,7 @@
 
 ## Windows 설치 파일 다운로드
 
-**[화면해설 대본 도구 v0.4.0-beta.2 설치 파일 내려받기](https://github.com/buildergarlic/ginuni/releases/download/v0.4.0-beta.2/ScreenDescriptionScriptMaker-0.4.0-beta.2-Setup.exe)**
+**[화면해설 대본 도구 v0.4.0-beta.3 설치 파일 내려받기](https://github.com/buildergarlic/ginuni/releases/download/v0.4.0-beta.3/ScreenDescriptionScriptMaker-0.4.0-beta.3-Setup.exe)**
 
 - Windows 10/11용 설치 파일이며 약 153MB입니다.
 - 새 버전과 체크섬은 [GiNuNi Releases](https://github.com/buildergarlic/ginuni/releases)에서 확인할 수 있습니다.
@@ -12,7 +12,7 @@
 
 ## 현재 버전
 
-- 버전: `0.4.0-beta.2`
+- 버전: `0.4.0-beta.3`
 - 운영체제: Windows 10/11
 - 입력 길이: 최대 3시간
 - 기본 언어: 한국어
