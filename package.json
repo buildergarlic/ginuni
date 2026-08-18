@@ -20,7 +20,7 @@
     "verify": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
-    "@xmldom/xmldom": "^0.8.11",
+    "@xmldom/xmldom": "^0.9.11",
     "electron-updater": "6.8.9",
     "openai": "^7.4.0",
     "react": "^19.1.1",
