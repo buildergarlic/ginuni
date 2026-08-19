@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { type MouseEvent as ReactMouseEvent, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { DESCRIPTION_TEXT } from '@shared/constants'
 import { formatTimecode, parseTimecode } from '@shared/timecode'
 import { validateRows } from '@shared/rows'
@@ -569,6 +569,12 @@ type InlineRowDraft = {
   content: string
 }
 
+type RowContextMenuState = {
+  rowId: string
+  x: number
+  y: number
+}
+
 function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSupport, onRetry, onRepairModel, notify, closeSaveRef }: {
   project: ScriptProject
   onProject: (value: ScriptProject) => void
@@ -592,6 +598,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   const [mediaError, setMediaError] = useState('')
   const [inlineDraft, setInlineDraft] = useState<InlineRowDraft | null>(null)
   const [inlineErrors, setInlineErrors] = useState<{ start?: string; end?: string; content?: string }>({})
+  const [contextMenu, setContextMenu] = useState<RowContextMenuState | null>(null)
   const mediaRef = useRef<MediaHandle>(null)
   const rowsRef = useRef(project.rows)
   const editVersionRef = useRef(0)
@@ -599,6 +606,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   const savePromiseRef = useRef<Promise<void> | null>(null)
   const errors = useMemo(() => validateRows(rows), [rows])
   const selectedIndex = rows.findIndex((row) => row.id === selectedId)
+  const contextMenuIndex = contextMenu ? rows.findIndex((row) => row.id === contextMenu.rowId) : -1
   const selected = rows[selectedIndex]
   const latestRun = project.runs.at(-1)
   const supportsSpeakerLabels = projectSupportsSpeakerLabels(project)
@@ -619,6 +627,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     setHistory([])
     setDirty(false)
     setMediaError('')
+    setContextMenu(null)
   }, [project.id])
 
   useEffect(() => {
@@ -679,6 +688,25 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     return () => window.clearTimeout(timer)
   }, [dirty, flushSave, notify, rows])
 
+  useEffect(() => {
+    const closeMenu = (): void => setContextMenu(null)
+    const onMouseDown = (event: MouseEvent): void => {
+      const target = event.target as Element | null
+      if (target?.closest('.row-context-menu')) return
+      closeMenu()
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') closeMenu()
+    }
+
+    window.addEventListener('mousedown', onMouseDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('mousedown', onMouseDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [])
+
   const applyRows = (next: ScriptRow[]): void => {
     setHistory((value) => [...value.slice(-29), rows])
     rowsRef.current = next
@@ -738,41 +766,178 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     rowsRef.current = previous
     editVersionRef.current += 1
     setRows(previous)
+    setInlineDraft(loadDraftFromRow(previous[0]))
     setHistory((value) => value.slice(0, -1))
     setDirty(true)
   }
-  const split = (): void => {
-    if (!applyInlineDraft()) return
-    if (!selected) return
-    const midpoint = Math.round(((selected.startMs + selected.endMs) / 2) / 1000) * 1000
+  const splitAtIndex = (index: number): void => {
+    const row = rows[index]
+    if (!row) return
+    const midpoint = Math.round(((row.startMs + row.endMs) / 2) / 1000) * 1000
     const requested = Math.round(playhead * 1000 / 1000) * 1000
-    const point = requested > selected.startMs && requested < selected.endMs ? requested : midpoint
-    if (point <= selected.startMs || point >= selected.endMs) return
+    const point = requested > row.startMs && requested < row.endMs ? requested : midpoint
+    if (point <= row.startMs || point >= row.endMs) return
     const next = [...rows]
-    next.splice(selectedIndex, 1,
-      { ...selected, id: crypto.randomUUID(), endMs: point, reviewed: true },
-      { ...selected, id: crypto.randomUUID(), startMs: point, reviewed: true }
+    next.splice(index, 1,
+      { ...row, id: crypto.randomUUID(), endMs: point, reviewed: true },
+      { ...row, id: crypto.randomUUID(), startMs: point, reviewed: true }
     )
     applyRows(next)
+    setSelectedId(next[index].id)
   }
-  const mergeNext = (): void => {
+  const split = (): void => {
     if (!applyInlineDraft()) return
-    if (!selected || selectedIndex < 0 || selectedIndex >= rows.length - 1) return
-    const following = rows[selectedIndex + 1]
+    if (!selected || selectedIndex < 0) return
+    splitAtIndex(selectedIndex)
+  }
+  const mergeNextAtIndex = (index: number): void => {
+    if (index < 0 || index >= rows.length - 1) return
+    const selectedRow = rows[index]
+    const following = rows[index + 1]
     const merged: ScriptRow = {
-      ...selected,
+      ...selectedRow,
       id: crypto.randomUUID(),
       endMs: following.endMs,
-      kind: selected.kind === 'dialogue' || following.kind === 'dialogue' ? 'dialogue' : 'descriptionGap',
-      speakers: [...new Set([...selected.speakers, ...following.speakers])],
-      content: selected.kind === 'descriptionGap' && following.kind === 'descriptionGap' ? DESCRIPTION_TEXT : `${selected.content} ${following.content}`.trim(),
-      sourceSegmentIds: [...selected.sourceSegmentIds, ...following.sourceSegmentIds],
+      kind: selectedRow.kind === 'dialogue' || following.kind === 'dialogue' ? 'dialogue' : 'descriptionGap',
+      speakers: [...new Set([...selectedRow.speakers, ...following.speakers])],
+      content: selectedRow.kind === 'descriptionGap' && following.kind === 'descriptionGap' ? DESCRIPTION_TEXT : `${selectedRow.content} ${following.content}`.trim(),
+      sourceSegmentIds: [...selectedRow.sourceSegmentIds, ...following.sourceSegmentIds],
       reviewed: true
     }
     const next = [...rows]
-    next.splice(selectedIndex, 2, merged)
+    next.splice(index, 2, merged)
     applyRows(next)
     setSelectedId(merged.id)
+  }
+  const mergeNext = (): void => {
+    if (!applyInlineDraft()) return
+    if (!selected || selectedIndex < 0) return
+    mergeNextAtIndex(selectedIndex)
+  }
+  const deleteRowAtIndex = (index: number): void => {
+    if (index < 0) return
+    const target = rows[index]
+    if (!target) return
+    const next = rows.filter((row) => row.id !== target.id)
+    if (next.length === 0) {
+      applyRows(next)
+      setSelectedId('')
+      setInlineDraft(null)
+      return
+    }
+    const nextSelected = next[index] ?? next[index - 1] ?? next[0]
+    applyRows(next)
+    if (nextSelected) {
+      setSelectedId(nextSelected.id)
+      setInlineDraft(loadDraftFromRow(nextSelected))
+    }
+  }
+  const addBlankRowAtIndex = (index: number, placement: 'before' | 'after'): void => {
+    if (index < 0) return
+    const minGap = 1100
+    const safeDuration = Number.isFinite(project.media.durationMs) && project.media.durationMs > 0 ? project.media.durationMs : (rows.at(-1)?.endMs ?? 1000)
+    const lowerBound = placement === 'before' ? (index > 0 ? rows[index - 1]?.endMs ?? 0 : 0) : rows[index]?.endMs ?? 0
+    const upperBound = placement === 'before' ? rows[index]?.startMs ?? safeDuration : rows[index + 1]?.startMs ?? safeDuration
+    const gap = upperBound - lowerBound
+
+    let startMs = lowerBound
+    let endMs = Math.max(lowerBound + 1000, startMs + 1000)
+    let fallback = false
+
+    if (gap >= minGap) {
+      startMs = lowerBound + Math.floor((gap - 1000) / 2)
+      endMs = startMs + 1000
+    } else {
+      const timelineEnd = Math.max(rows.at(-1)?.endMs ?? 0, safeDuration)
+      startMs = Math.max(0, timelineEnd - 1000)
+      endMs = Math.max(startMs + 1000, timelineEnd)
+      fallback = true
+    }
+
+    const inserted: ScriptRow = {
+      id: crypto.randomUUID(),
+      kind: 'dialogue',
+      startMs,
+      endMs,
+      speakers: [],
+      content: '대사',
+      sourceSegmentIds: [],
+      reviewed: false
+    }
+
+    const next = [...rows]
+    if (fallback) {
+      next.push(inserted)
+    } else if (placement === 'before') {
+      next.splice(index, 0, inserted)
+    } else {
+      next.splice(index + 1, 0, inserted)
+    }
+    applyRows(next)
+    setSelectedId(inserted.id)
+    setInlineDraft(loadDraftFromRow(inserted))
+    mediaRef.current?.seek(startMs / 1000)
+    if (fallback) notify('시간 간격이 부족해 행을 타임라인 끝으로 배치했습니다.')
+  }
+  const addBlankRow = (placement: 'before' | 'after'): void => {
+    if (!applyInlineDraft()) return
+    if (!selected || selectedIndex < 0) return
+    addBlankRowAtIndex(selectedIndex, placement)
+  }
+  const addRowBefore = (): void => addBlankRow('before')
+  const addRowAfter = (): void => addBlankRow('after')
+  const deleteSelectedRow = (): void => {
+    if (!applyInlineDraft()) return
+    if (!selected) return
+    deleteRowAtIndex(selectedIndex)
+  }
+  const openContextMenu = (event: ReactMouseEvent<HTMLTableRowElement>, rowId: string): void => {
+    const row = rows.find((entry) => entry.id === rowId)
+    if (!row) return
+    if (!chooseRow(row)) return
+    event.preventDefault()
+    event.stopPropagation()
+    const maxWidth = 220
+    const maxHeight = 250
+    const x = Math.max(8, Math.min(event.clientX, window.innerWidth - maxWidth - 8))
+    const y = Math.max(8, Math.min(event.clientY, window.innerHeight - maxHeight - 8))
+    setContextMenu({ rowId, x, y })
+  }
+  const closeContextMenu = (): void => setContextMenu(null)
+  const executeContextAction = (handler: (index: number) => void): void => {
+    if (!contextMenu) return
+    if (!applyInlineDraft()) return
+    const targetIndex = rows.findIndex((row) => row.id === contextMenu.rowId)
+    if (targetIndex < 0) {
+      closeContextMenu()
+      return
+    }
+    closeContextMenu()
+    handler(targetIndex)
+  }
+  const runSplitOnContextRow = (): void => {
+    executeContextAction((targetIndex) => splitAtIndex(targetIndex))
+  }
+  const runMergeOnContextRow = (): void => {
+    executeContextAction((targetIndex) => {
+      if (targetIndex >= rows.length - 1) return
+      mergeNextAtIndex(targetIndex)
+    })
+  }
+  const runDeleteOnContextRow = (): void => {
+    executeContextAction((targetIndex) => {
+      deleteRowAtIndex(targetIndex)
+    })
+  }
+  const runInsertBeforeInContext = (): void => {
+    executeContextAction((targetIndex) => {
+      addBlankRowAtIndex(targetIndex, 'before')
+    })
+  }
+  const runInsertAfterInContext = (): void => {
+    executeContextAction((targetIndex) => {
+      addBlankRowAtIndex(targetIndex, 'after')
+    })
   }
   const renameSpeaker = (): void => {
     if (!applyInlineDraft()) return
@@ -881,7 +1046,11 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
               <div className="button-row compact">
                 <button onClick={split}>현재 위치에서 분할</button>
                 <button disabled={selectedIndex === rows.length - 1} onClick={mergeNext}>다음 행과 병합</button>
-                <button className="delete-link" onClick={() => applyRows(rows.filter((row) => row.id !== selected.id))}>행 삭제</button>
+                <button className="delete-link" onClick={deleteSelectedRow}>행 삭제</button>
+              </div>
+              <div className="button-row compact">
+                <button onClick={addRowBefore}>위에 행 추가</button>
+                <button onClick={addRowAfter}>아래에 행 추가</button>
               </div>
             </div>
           )}
@@ -950,7 +1119,12 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                     const isEditing = inlineDraft?.rowId === row.id
                     const draft = isEditing ? inlineDraft : null
                     return (
-                      <tr key={row.id} className={`${row.kind === 'descriptionGap' ? 'gap-row' : ''} ${selectedId === row.id ? 'selected-row' : ''}`} onClick={() => void chooseRow(row)}>
+                      <tr
+                        key={row.id}
+                        className={`${row.kind === 'descriptionGap' ? 'gap-row' : ''} ${selectedId === row.id ? 'selected-row' : ''}`}
+                        onClick={() => void chooseRow(row)}
+                        onContextMenu={(event) => openContextMenu(event, row.id)}
+                      >
                         <td><span className={`kind-badge ${row.kind}`}>{row.kind === 'dialogue' ? '대사' : '해설'}</span></td>
                         <td>
                           {isEditing ? (
@@ -1007,7 +1181,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                               rows={3}
                             />
                           ) : (
-                            row.content
+                            <div className="content-display">{row.content}</div>
                           )}
                         </td>
                         <td>{row.reviewed ? <span className="reviewed-mark">✓</span> : <span className="unreviewed-mark">—</span>}</td>
@@ -1017,6 +1191,15 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                 ))}
               </tbody>
             </table>
+            {contextMenu && (
+              <div className="row-context-menu" style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }} onMouseDown={(event) => event.stopPropagation()}>
+                <button className="row-context-item" onClick={() => void runInsertBeforeInContext()}>위에 행 추가</button>
+                <button className="row-context-item" onClick={() => void runInsertAfterInContext()}>아래에 행 추가</button>
+                <button className="row-context-item" onClick={() => void runSplitOnContextRow()}>현재 위치에서 분할</button>
+                <button className="row-context-item" onClick={() => void runMergeOnContextRow()} disabled={contextMenuIndex < 0 || contextMenuIndex >= rows.length - 1}>다음 행과 병합</button>
+                <button className="row-context-item danger" onClick={() => void runDeleteOnContextRow()}>행 삭제</button>
+              </div>
+            )}
             {rows.length === 0 && <div className="empty-table">아직 분석된 대본이 없습니다. 상단의 처리 시작 버튼으로 음성을 분석하세요.</div>}
           </div>
         </main>
