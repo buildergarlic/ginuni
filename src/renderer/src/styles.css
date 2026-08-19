@@ -171,6 +171,45 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .edit-card h3 { margin: 0 0 13px; font-size: 14px; }
 .edit-card-heading { display: flex; justify-content: space-between; }
 .edit-card-heading span { font-size: 10px; font-weight: 800; color: var(--green); }
+.review-font-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 11px;
+  padding: 7px 6px;
+  border: 1px solid #d8e0db;
+  border-radius: 9px;
+  background: #f7faf8;
+  color: #44504d;
+  font-size: 11px;
+}
+.review-font-control > span {
+  font-weight: 700;
+}
+.review-font-control button {
+  min-width: 28px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid #d4dcd7;
+  background: #eef3ef;
+  color: #1f4d3f;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 900;
+}
+.review-font-slider {
+  flex: 1;
+  min-width: 110px;
+  margin: 0 4px;
+  accent-color: var(--green);
+}
+.review-font-size-label {
+  min-width: 46px;
+  text-align: right;
+  color: #2f5550;
+  font-size: 11px;
+  font-weight: 800;
+}
 .time-edit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .time-edit-grid label { font-size: 10px; color: var(--muted); font-weight: 700; }
 .time-edit-grid input { margin-top: 5px; font-variant-numeric: tabular-nums; }

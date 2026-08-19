@@ -20,6 +20,11 @@ type SourceTab = 'local' | 'youtube'
 type AnalysisPreset = 'local' | 'local-diarization' | 'openai'
 type YoutubeEmbedMode = 'nocookie' | 'youtube'
 
+const REVIEW_FONT_SIZE_KEY = 'ginuni-review-font-size'
+const REVIEW_FONT_SIZE_MIN = 11
+const REVIEW_FONT_SIZE_MAX = 28
+const REVIEW_FONT_SIZE_DEFAULT = 12
+
 interface MediaHandle {
   seek(seconds: number): void
 }
@@ -31,6 +36,11 @@ function errorMessage(error: unknown): string {
 
 function statusLabel(status: ProjectSummary['status']): string {
   return ({ draft: '준비', processing: '처리 중', review: '검수', exported: '내보냄', error: '오류' } as const)[status]
+}
+
+function normalizeReviewFontSize(value: number): number {
+  const parsed = Number.isFinite(value) ? Math.round(value) : REVIEW_FONT_SIZE_DEFAULT
+  return Math.min(REVIEW_FONT_SIZE_MAX, Math.max(REVIEW_FONT_SIZE_MIN, parsed))
 }
 
 function processingStageLabel(stage?: string): string {
@@ -1006,6 +1016,14 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   const [rows, setRows] = useState(project.rows)
   const [selectedId, setSelectedId] = useState(project.rows[0]?.id ?? '')
   const [playhead, setPlayhead] = useState(0)
+  const [reviewFontSize, setReviewFontSizeState] = useState<number>(() => {
+    try {
+      const saved = Number(window.localStorage.getItem(REVIEW_FONT_SIZE_KEY))
+      return normalizeReviewFontSize(saved)
+    } catch {
+      return REVIEW_FONT_SIZE_DEFAULT
+    }
+  })
   const [history, setHistory] = useState<ScriptRow[][]>([])
   const [dirty, setDirty] = useState(false)
   const [speakerFrom, setSpeakerFrom] = useState('')
@@ -1029,6 +1047,19 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   const selected = rows[selectedIndex]
   const latestRun = project.runs.at(-1)
   const supportsSpeakerLabels = projectSupportsSpeakerLabels(project)
+  const reviewFontStyle = useMemo(() => ({
+    fontSize: `${reviewFontSize}px`,
+    lineHeight: 1.55
+  }), [reviewFontSize])
+  const setReviewFontSize = useCallback((value: number): void => {
+    const normalized = normalizeReviewFontSize(value)
+    setReviewFontSizeState(normalized)
+    try {
+      window.localStorage.setItem(REVIEW_FONT_SIZE_KEY, String(normalized))
+    } catch {
+      // ignore preference persistence failures
+    }
+  }, [])
   const loadDraftFromRow = useCallback((row: ScriptRow | undefined): InlineRowDraft | null => {
     if (!row) return null
     return { rowId: row.id, start: formatTimecode(row.startMs), end: formatTimecode(row.endMs), content: row.content }
@@ -1150,15 +1181,20 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   const resizeInlineContentEditor = useCallback((element?: HTMLTextAreaElement): void => {
     const textarea = element ?? inlineContentRef.current
     if (!textarea) return
+
+    textarea.style.fontSize = `${reviewFontSize}px`
+    textarea.style.lineHeight = '1.55'
+    textarea.style.minHeight = `${Math.max(72, Math.round(reviewFontSize * 4.8))}px`
+
+    const maxHeight = Math.max(360, Math.round(reviewFontSize * 18))
     textarea.style.height = 'auto'
-    const nextHeight = Math.min(Math.max(72, textarea.scrollHeight), 360)
-    textarea.style.height = `${nextHeight}px`
-    textarea.style.overflowY = textarea.scrollHeight > 360 ? 'auto' : 'hidden'
-  }, [])
+    textarea.style.height = `${Math.min(Math.max(Math.round(reviewFontSize * 4.8), textarea.scrollHeight), maxHeight)}px`
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden'
+  }, [reviewFontSize])
   useEffect(() => {
     if (!inlineDraft || inlineDraft.rowId !== selectedId) return
     requestAnimationFrame(() => resizeInlineContentEditor())
-  }, [inlineDraft?.content, inlineDraft?.rowId, selectedId, resizeInlineContentEditor])
+  }, [inlineDraft?.content, inlineDraft?.rowId, selectedId, resizeInlineContentEditor, reviewFontSize])
   const selectRow = (row: ScriptRow): void => {
     setSelectedId(row.id)
     setInlineDraft(loadDraftFromRow(row))
@@ -1503,10 +1539,25 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
             <button className="secondary-button" onClick={openCurrentYoutubeInBrowser}>브라우저에서 직접 열기</button>
           )}
           <div className="playhead-card"><span>현재 재생 위치</span><strong>{formatTimecode(playhead * 1000)}</strong></div>
-          {selected && (
-            <div className="edit-card">
-              <div className="edit-card-heading"><h3>선택한 행 편집</h3><span>{selected.kind === 'dialogue' ? '대사' : '해설'}</span></div>
-              <p className="help-text" style={{ margin: 0, marginBottom: 10, color: '#596563', fontSize: 12 }}>행 편집은 표에서 직접 수정하세요.</p>
+            {selected && (
+              <div className="edit-card">
+                <div className="review-font-control" aria-label="검수 편집 창 글자 크기 조절">
+                  <span>글자 크기</span>
+                  <button onClick={() => void setReviewFontSize(reviewFontSize - 1)} disabled={reviewFontSize <= REVIEW_FONT_SIZE_MIN}>−</button>
+                  <input
+                    type="range"
+                    min={REVIEW_FONT_SIZE_MIN}
+                    max={REVIEW_FONT_SIZE_MAX}
+                    value={reviewFontSize}
+                    onChange={(event) => setReviewFontSize(event.target.valueAsNumber)}
+                    aria-label="검수 창 글자 크기"
+                    className="review-font-slider"
+                  />
+                  <button onClick={() => void setReviewFontSize(reviewFontSize + 1)} disabled={reviewFontSize >= REVIEW_FONT_SIZE_MAX}>＋</button>
+                  <span className="review-font-size-label">{reviewFontSize}px</span>
+                </div>
+                <div className="edit-card-heading"><h3>선택한 행 편집</h3><span>{selected.kind === 'dialogue' ? '대사' : '해설'}</span></div>
+                <p className="help-text" style={{ margin: 0, marginBottom: 10, color: '#596563', fontSize: 12 }}>행 편집은 표에서 직접 수정하세요.</p>
               <label className="field-label">분류</label>
               <div className="segmented-control">
                 <button className={selected.kind === 'dialogue' ? 'active' : ''} onClick={() => updateRow(selected.id, {
@@ -1664,12 +1715,13 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                           {inlineErrors.end && isEditing && <small className="inline-error-hint">{inlineErrors.end}</small>}
                         </td>
                         <td>{Math.max(0, Math.round((row.endMs - row.startMs) / 1000))}</td>
-                        <td className="content-cell">
+                        <td className="content-cell" style={{ ...reviewFontStyle, minHeight: `${Math.max(72, Math.round(reviewFontSize * 4.8))}px` }}>
                           {isEditing ? (
                             <textarea
                               className="inline-content-editor"
                               ref={inlineContentRef}
                               value={draft?.content ?? row.content}
+                              style={reviewFontStyle}
                               onChange={(event) => {
                                 updateInlineDraft({ content: event.target.value })
                                 resizeInlineContentEditor(event.target)
@@ -1680,7 +1732,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                               onBlur={() => void applyInlineDraft()}
                             />
                           ) : (
-                            <div className="content-display">{row.content}</div>
+                            <div className="content-display" style={reviewFontStyle}>{row.content}</div>
                           )}
                         </td>
                         <td>{row.reviewed ? <span className="reviewed-mark">✓</span> : <span className="unreviewed-mark">—</span>}</td>
