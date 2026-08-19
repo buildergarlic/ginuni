@@ -163,6 +163,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .project-error-banner strong, .project-error-banner span { display: block; }
 .project-error-banner span { margin-top: 4px; font-size: 12px; line-height: 1.5; }
 .project-error-banner small { flex: none; color: #96625d; font-size: 10px; font-family: Consolas, monospace; }
+.project-error-banner > div > small { display: block; margin-top: 3px; }
 .project-error-banner .error-resolution { margin: 8px 0 0; font-size: 11px; color: #7f3029; }
 .project-error-banner .error-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
 .project-error-banner .compact-action { padding: 7px 10px; font-size: 11px; }

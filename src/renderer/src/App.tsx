@@ -46,7 +46,22 @@ function processingResolution(code?: string): string {
     UNSUPPORTED_ARCHITECTURE: '현재 PC의 Windows/CPU 아키텍처에서는 로컬 엔진을 사용할 수 없습니다. OpenAI 모드를 사용해 보세요.',
     INSUFFICIENT_MEMORY: '다른 프로그램을 종료하고 다시 시도하세요.',
     WHISPER_FAILED: '다시 분석하거나 로컬 모델 복구를 실행하세요.',
-    WHISPER_OUTPUT_INVALID: '다시 분석하고 계속 실패하면 진단 파일을 저장해 문의하세요.'
+    WHISPER_OUTPUT_INVALID: '다시 분석하고 계속 실패하면 진단 파일을 저장해 문의하세요.',
+    OPENAI_AUDIO_TOO_LARGE: '업로드 음성이 25MB 제한을 넘었습니다. 더 짧은 영상이나 낮은 오디오 품질로 다시 시도하세요.',
+    OPENAI_UNPROCESSABLE_AUDIO: 'OpenAI가 음성 형식을 읽지 못했습니다. 오디오 형식 변환 후 다시 시도하세요.',
+    OPENAI_BAD_REQUEST: 'OpenAI 요청 형식이 거부되었습니다. 오류 코드와 문제 파라미터를 확인하세요.',
+    OPENAI_MODEL_UNAVAILABLE: '현재 API 키 또는 프로젝트에서 OpenAI 음성 모델을 사용할 수 없습니다. API 프로젝트와 모델 권한을 확인하세요.',
+    OPENAI_AUTHENTICATION: 'OpenAI API 키가 올바르지 않거나 만료되었습니다. 설정에서 키를 다시 저장하세요.',
+    OPENAI_PERMISSION_DENIED: '이 API 키에는 OpenAI 음성 전사 권한이 없습니다.',
+    OPENAI_CREDIT_BALANCE_EXHAUSTED: 'OpenAI API 크레딧이 없습니다. OpenAI Platform 결제 설정을 확인하세요.',
+    OPENAI_ORGANIZATION_SPEND_LIMIT: 'OpenAI 조직 지출 한도에 도달했습니다.',
+    OPENAI_PROJECT_SPEND_LIMIT: 'OpenAI 프로젝트 지출 한도에 도달했습니다.',
+    OPENAI_ORGANIZATION_USAGE_LIMIT: 'OpenAI 조직 사용 한도에 도달했습니다.',
+    OPENAI_QUOTA_EXCEEDED: 'OpenAI API 사용 가능 금액 또는 한도를 확인하세요.',
+    OPENAI_RATE_LIMIT: 'OpenAI 요청 속도 제한입니다. 잠시 후 다시 시도하세요.',
+    OPENAI_CONNECTION_TIMEOUT: 'OpenAI 응답 시간이 초과되었습니다. 인터넷 연결을 확인하세요.',
+    OPENAI_CONNECTION: 'OpenAI 서버에 연결할 수 없습니다. 인터넷 연결을 확인하세요.',
+    OPENAI_SERVER: 'OpenAI 서버에 일시적인 문제가 있습니다. 잠시 후 다시 시도하세요.'
   } as Record<string, string>)[code ?? ''] ?? '다시 분석하고 계속 실패하면 진단 파일을 저장해 문의하세요.'
 }
 
@@ -654,6 +669,15 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
       if (result) notify(`진단 파일을 저장했습니다: ${result.path}`)
     } catch (cause) { notify(errorMessage(cause)) }
   }
+  const copyRequestId = async (): Promise<void> => {
+    if (!latestRun?.requestId) return
+    try {
+      await navigator.clipboard.writeText(latestRun.requestId)
+      notify('요청 ID를 복사했습니다.')
+    } catch {
+      notify(`요청 ID: ${latestRun.requestId}`)
+    }
+  }
   const leaveReview = (navigate: () => void): void => {
     void (async () => {
       try {
@@ -726,7 +750,23 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
         <main className="script-panel">
           {project.lastError && (
             <div className="project-error-banner">
-              <div><strong>마지막 분석 오류</strong><span>{project.lastError}</span>{latestRun?.errorStage && <small>실패 단계: {processingStageLabel(latestRun.errorStage)}</small>}<p className="error-resolution">{processingResolution(latestRun?.errorCode)}</p><div className="error-actions"><button className="secondary-button compact-action" onClick={onRetry}>다시 분석</button>{(project.transcriptionEngine ?? 'local') === 'local' && <button className="secondary-button compact-action" onClick={onRepairModel}>로컬 모델 복구</button>}<button className="secondary-button compact-action" onClick={exportDiagnostics}>진단 파일 저장</button></div></div>
+              <div>
+                <strong>마지막 분석 오류</strong>
+                <span>{project.lastError}</span>
+                {latestRun?.errorStage && <small>실패 단계: {processingStageLabel(latestRun.errorStage)}</small>}
+                {latestRun?.httpStatus !== undefined && <small>HTTP 상태: {latestRun.httpStatus}</small>}
+                {latestRun?.apiCode && <small>OpenAI 오류 코드: {latestRun.apiCode}</small>}
+                {latestRun?.apiType && <small>오류 유형: {latestRun.apiType}</small>}
+                {latestRun?.apiParam && <small>문제 파라미터: {latestRun.apiParam}</small>}
+                {latestRun?.apiDetail && <small>서버 안내: {latestRun.apiDetail}</small>}
+                <p className="error-resolution">{processingResolution(latestRun?.errorCode)}</p>
+                <div className="error-actions">
+                  <button className="secondary-button compact-action" onClick={onRetry}>{latestRun?.errorCode === 'OPENAI_UNPROCESSABLE_AUDIO' ? '오디오 형식 변환 후 재시도' : '다시 분석'}</button>
+                  {(project.transcriptionEngine ?? 'local') === 'local' && <button className="secondary-button compact-action" onClick={onRepairModel}>로컬 모델 복구</button>}
+                  {latestRun?.requestId && <button className="secondary-button compact-action" onClick={() => void copyRequestId()}>요청 ID 복사</button>}
+                  <button className="secondary-button compact-action" onClick={exportDiagnostics}>진단 파일 저장</button>
+                </div>
+              </div>
               <small>{latestRun?.errorCode ? `오류 코드: ${latestRun.errorCode}` : ''}{latestRun?.exitCode !== undefined ? ` · 종료 코드: ${latestRun.exitCode}` : ''}{latestRun?.requestId ? ` · 요청 ID: ${latestRun.requestId}` : ''}</small>
             </div>
           )}

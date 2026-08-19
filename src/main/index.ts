@@ -133,6 +133,7 @@ async function processProject(id: string): Promise<ScriptProject> {
     project.segments = await provider.transcribe({
       audioPath: project.media.audioPath!,
       language: 'ko',
+      durationMs: project.media.durationMs,
       signal: controller.signal,
       onProgress: engine === 'local'
         ? (percent) => progress({ stage: 'transcribing', percent: 55 + Math.round(percent * 0.3), message: `이 PC에서 음성을 분석하고 있습니다. (${percent}%)` })
@@ -170,6 +171,12 @@ async function processProject(id: string): Promise<ScriptProject> {
     run.modelIntegrity = modelIntegrity
     run.httpStatus = transcriptionFailure?.status
     run.requestId = transcriptionFailure?.requestId
+    run.apiCode = transcriptionFailure?.apiCode
+    run.apiType = transcriptionFailure?.apiType
+    run.apiParam = transcriptionFailure?.apiParam
+    run.apiDetail = transcriptionFailure?.apiDetail
+    run.openaiRequest = transcriptionFailure?.requestInfo
+    run.openaiAudio = transcriptionFailure?.audioInfo
     await saveProject(project)
     throw new Error(project.lastError)
   } finally {
