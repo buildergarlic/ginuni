@@ -193,7 +193,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .script-table tbody tr:hover { background: #f5f8f6; }
 .script-table tr.gap-row { background: var(--pink); font-weight: 800; }
 .script-table tr.selected-row { outline: 2px solid var(--green); outline-offset: -2px; }
-.content-cell { line-height: 1.6; word-break: keep-all; min-height: 64px; }
+.content-cell { line-height: 1.6; word-break: keep-all; min-height: 72px; }
 .content-display {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -238,10 +238,18 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   font-size: 12px;
 }
 .inline-content-editor {
-  min-height: 56px;
+  min-height: 72px;
+  max-height: 360px;
+  height: 72px;
   resize: vertical;
   line-height: 1.5;
   font-family: inherit;
+  overflow-x: hidden;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+  box-sizing: border-box;
 }
 .inline-time-input:focus,
 .inline-content-editor:focus {

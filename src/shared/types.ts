@@ -300,6 +300,7 @@ export interface AppApi {
   deleteLocalModel(): Promise<LocalModelStatus>
   exportDiagnostics(id: string): Promise<{ path: string } | null>
   openExternal(target: ExternalLinkTarget): Promise<void>
+  openExternalUrl(url: string): Promise<void>
   checkForUpdates(): Promise<UpdateStatus>
   installUpdate(): Promise<void>
   respondToClose(allow: boolean): Promise<void>

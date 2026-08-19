@@ -20,6 +20,7 @@ const api: AppApi = {
   deleteLocalModel: () => ipcRenderer.invoke('model:delete'),
   exportDiagnostics: (id: string) => ipcRenderer.invoke('project:export-diagnostics', id),
   openExternal: (target: ExternalLinkTarget) => ipcRenderer.invoke('app:open-external', target),
+  openExternalUrl: (url: string) => ipcRenderer.invoke('app:open-external-url', url),
   checkForUpdates: () => ipcRenderer.invoke('app:check-for-updates'),
   installUpdate: () => ipcRenderer.invoke('app:install-update'),
   respondToClose: (allow: boolean) => ipcRenderer.invoke('app:close-response', allow),

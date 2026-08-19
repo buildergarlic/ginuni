@@ -18,6 +18,7 @@ import type {
 type Screen = 'home' | 'review' | 'settings' | 'about' | 'support'
 type SourceTab = 'local' | 'youtube'
 type AnalysisPreset = 'local' | 'local-diarization' | 'openai'
+type YoutubeEmbedMode = 'nocookie' | 'youtube'
 
 interface MediaHandle {
   seek(seconds: number): void
@@ -93,13 +94,122 @@ function videoIdFromUrl(value: string): string | null {
   }
 }
 
-function youtubeEmbedUrl(videoId: string): string {
+function youtubeOriginHint(): string {
+  if (typeof window === 'undefined') return 'https://www.youtube.com'
+  return window.location.origin.startsWith('file:') ? 'https://www.youtube.com' : window.location.origin
+}
+
+function youtubeMessageTarget(mode: YoutubeEmbedMode): string {
+  return mode === 'youtube' ? 'https://www.youtube.com' : 'https://www.youtube-nocookie.com'
+}
+
+function youtubeEmbedUrl(videoId: string, mode: YoutubeEmbedMode = 'nocookie'): string {
+  const origin = youtubeOriginHint()
+  const host = mode === 'youtube' ? 'https://www.youtube.com' : 'https://www.youtube-nocookie.com'
   const parameters = new URLSearchParams({
     enablejsapi: '1',
     playsinline: '1',
-    rel: '0'
+    rel: '0',
+    origin,
+    widget_referrer: origin,
+    modestbranding: '1',
+    iv_load_policy: '3'
   })
-  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?${parameters}`
+  return `${host}/embed/${encodeURIComponent(videoId)}?${parameters}`
+}
+
+export function parseYouTubeMessage(data: unknown): { code?: number; message?: string } {
+  if (!data || typeof data !== 'object') return {}
+  const raw = data as Record<string, unknown>
+  const event = String(raw.event ?? '')
+  const info = typeof raw.info === 'object' && raw.info !== null ? (raw.info as Record<string, unknown>) : undefined
+  const detail = info?.detail
+  const reason = info?.reason
+  const reasonText = raw.reason
+  const errorText =
+    typeof raw.error === 'string' ? raw.error :
+    typeof info?.error === 'string' ? String(info.error)
+      : undefined
+  const candidates = [
+    raw.error,
+    raw.code,
+    info?.error,
+    info?.playerError,
+    info?.code
+  ]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'number') return { code: candidate, message: `event=${event}` }
+    if (typeof candidate === 'string' && /^\d+$/.test(candidate)) {
+      return { code: Number.parseInt(candidate, 10), message: `event=${event}` }
+    }
+  }
+  if (typeof detail === 'string') return { message: detail }
+  if (typeof reason === 'string') return { message: reason }
+  if (typeof reasonText === 'string') return { message: reasonText }
+  if (typeof errorText === 'string') return { message: errorText }
+  if (typeof event === 'string' && event.toLowerCase().includes('error')) return { message: event }
+  return {}
+}
+
+function youtubeErrorMessage(code: number | undefined): string {
+  if (code === 101) return '이 영상의 재생이 제한됩니다.'
+  if (code === 150) return '이 영상이 소유자 제한에 걸려 있습니다.'
+  if (code === 153) return '로그인하여 봇이 아님을 확인하세요.'
+  return '이 영상 재생 중 오류가 발생했습니다.'
+}
+
+function youtubeBlockMessage(videoId: string): string {
+  return `로그인하여 봇이 아님을 확인하세요.\n영상 ID: ${videoId}`
+}
+
+export function splitTextForDurationPoint(text: string, startMs: number, endMs: number, splitMs: number): [string, string] {
+  const normalized = text.replace(/\r\n/g, '\n')
+  const length = normalized.length
+  if (!normalized) return ['', '']
+  if (length <= 1) return [normalized, '']
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs + 1) return [normalized, '']
+
+  const ratio = Math.max(0, Math.min(1, (splitMs - startMs) / (endMs - startMs)))
+  const candidate = Math.max(1, Math.min(length - 1, Math.round(length * ratio)))
+  const isBoundary = (value: string) => value === ' ' || value === '\n' || value === '\t' || value === '\r'
+  const leftBoundary = (() => {
+    for (let i = candidate; i >= 0; i -= 1) {
+      if (isBoundary(normalized[i] ?? '')) return i + 1
+    }
+    return -1
+  })()
+  const rightBoundary = (() => {
+    for (let i = candidate + 1; i < length; i += 1) {
+      if (isBoundary(normalized[i] ?? '')) return i
+    }
+    return -1
+  })()
+
+  let splitIndex = candidate
+  if (leftBoundary > 0 && leftBoundary < length - 1) splitIndex = leftBoundary
+  else if (rightBoundary > 0 && rightBoundary < length - 1) splitIndex = rightBoundary
+
+  let left = normalized.slice(0, splitIndex).trimEnd()
+  let right = normalized.slice(splitIndex).trimStart()
+
+  if (!left.trim()) {
+    splitIndex = Math.max(1, Math.min(length - 1, Math.round(length * 0.5)))
+    left = normalized.slice(0, splitIndex).trimEnd()
+    right = normalized.slice(splitIndex).trimStart()
+  }
+  if (!right.trim()) {
+    splitIndex = Math.max(1, Math.min(length - 1, Math.round(length * 0.5)))
+    left = normalized.slice(0, splitIndex).trimEnd()
+    right = normalized.slice(splitIndex).trimStart()
+  }
+  return [left, right]
+}
+
+export function splitSourceSegments(segmentIds: string[], row: ScriptRow, splitMs: number): [string[], string[]] {
+  if (segmentIds.length <= 1 || row.endMs <= row.startMs + 1) return [segmentIds, []]
+  const ratio = Math.max(0, Math.min(1, (splitMs - row.startMs) / (row.endMs - row.startMs)))
+  const boundary = Math.max(1, Math.min(segmentIds.length - 1, Math.round(segmentIds.length * ratio)))
+  return [segmentIds.slice(0, boundary), segmentIds.slice(boundary)]
 }
 
 const MediaPlayer = forwardRef<MediaHandle, {
@@ -112,7 +222,12 @@ const MediaPlayer = forwardRef<MediaHandle, {
     const videoRef = useRef<HTMLVideoElement>(null)
     const iframeRef = useRef<HTMLIFrameElement>(null)
     const pendingSeekRef = useRef<number | null>(null)
+    const readyRef = useRef(false)
     const youtubeId = project.source.youtubeVideoId ?? videoIdFromUrl(project.source.uri)
+    const [youtubeMode, setYoutubeMode] = useState<YoutubeEmbedMode>('nocookie')
+    const [youtubeFallbackUsed, setYoutubeFallbackUsed] = useState(false)
+    const iframeOrigin = youtubeMessageTarget(youtubeMode)
+    const iframeSrc = youtubeId ? youtubeEmbedUrl(youtubeId, youtubeMode) : ''
 
     const seekLocalVideo = (seconds: number): void => {
       const video = videoRef.current
@@ -130,17 +245,25 @@ const MediaPlayer = forwardRef<MediaHandle, {
       }
     }
 
+    useEffect(() => {
+      setYoutubeMode('nocookie')
+      setYoutubeFallbackUsed(false)
+      readyRef.current = false
+    }, [youtubeId])
+
     useImperativeHandle(ref, () => ({
       seek(seconds: number) {
         const safeSeconds = Math.max(0, seconds)
         onTime(safeSeconds)
         seekLocalVideo(safeSeconds)
-        iframeRef.current?.contentWindow?.postMessage(
-          JSON.stringify({ event: 'command', func: 'seekTo', args: [safeSeconds, true] }),
-          'https://www.youtube-nocookie.com'
-        )
+        if (project.source.kind === 'youtube' && iframeRef.current?.contentWindow) {
+          iframeRef.current.contentWindow.postMessage(
+            JSON.stringify({ event: 'command', func: 'seekTo', args: [safeSeconds, true] }),
+            iframeOrigin
+          )
+        }
       }
-    }), [onTime])
+    }), [iframeOrigin, onTime, project.source.kind])
 
     const handleLoadedMetadata = (): void => {
       onReady()
@@ -156,40 +279,66 @@ const MediaPlayer = forwardRef<MediaHandle, {
     }
 
     useEffect(() => {
+      if (project.source.kind !== 'youtube' || !youtubeId) return
       const receive = (event: MessageEvent): void => {
-        if (event.origin !== 'https://www.youtube-nocookie.com') return
+        if (event.origin !== 'https://www.youtube.com' && event.origin !== 'https://www.youtube-nocookie.com') return
+        if (event.source !== iframeRef.current?.contentWindow) return
         try {
           const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
-          if (typeof data?.info?.currentTime === 'number') onTime(data.info.currentTime)
+          if (typeof data?.info?.currentTime === 'number') {
+            onTime(data.info.currentTime)
+            if (!readyRef.current) {
+              readyRef.current = true
+              onReady()
+              setYoutubeFallbackUsed(false)
+            }
+          }
+          const parsed = parseYouTubeMessage(data)
+          if (!parsed.code && !parsed.message) return
+          const lower = (parsed.message ?? '').toLowerCase()
+          const isBotLike = parsed.code === 153 || lower.includes('bot') || lower.includes('sign in') || lower.includes('login')
+          if (isBotLike && !youtubeFallbackUsed && !youtubeMode.includes('youtube')) {
+            setYoutubeMode('youtube')
+            setYoutubeFallbackUsed(true)
+            onError(youtubeBlockMessage(youtubeId))
+            return
+          }
+          const fallback = `${youtubeErrorMessage(parsed.code)}`
+          onError(`${fallback} (코드 ${parsed.code ?? '알 수 없음'})`)
         } catch {
           // YouTube의 다른 메시지는 무시한다.
         }
       }
-      window.addEventListener('message', receive)
       const timer = window.setInterval(() => {
         iframeRef.current?.contentWindow?.postMessage(
           JSON.stringify({ event: 'listening', id: 'screen-description-player', channel: 'info' }),
-          'https://www.youtube-nocookie.com'
+          iframeOrigin
         )
       }, 500)
+      window.addEventListener('message', receive)
       return () => {
         window.removeEventListener('message', receive)
         window.clearInterval(timer)
       }
-    }, [onTime])
+    }, [iframeOrigin, onTime, onError, youtubeFallbackUsed, youtubeId, project.source.kind, youtubeMode])
 
     if (project.source.kind === 'youtube' && youtubeId) {
       return (
         <iframe
+          key={`${youtubeMode}:${youtubeId}`}
           ref={iframeRef}
           className="media-frame"
           title="유튜브 검수 플레이어"
-          src={youtubeEmbedUrl(youtubeId)}
+          src={iframeSrc}
           referrerPolicy="strict-origin-when-cross-origin"
           allow="accelerometer; autoplay; encrypted-media; picture-in-picture"
           allowFullScreen
         />
       )
+    }
+
+    if (project.source.kind === 'youtube' && !youtubeId) {
+      return <div className="media-error">유효하지 않은 YouTube 링크입니다.</div>
     }
 
     return (
@@ -600,6 +749,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   const [inlineErrors, setInlineErrors] = useState<{ start?: string; end?: string; content?: string }>({})
   const [contextMenu, setContextMenu] = useState<RowContextMenuState | null>(null)
   const mediaRef = useRef<MediaHandle>(null)
+  const inlineContentRef = useRef<HTMLTextAreaElement | null>(null)
   const rowsRef = useRef(project.rows)
   const editVersionRef = useRef(0)
   const savedVersionRef = useRef(0)
@@ -716,7 +866,11 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   }
   const updateRow = (id: string, patch: Partial<ScriptRow>): void => applyRows(rows.map((row) => row.id === id ? { ...row, ...patch, reviewed: true } : row))
   const updateInlineDraft = (patch: Partial<Omit<InlineRowDraft, 'rowId'>>): void => {
-    setInlineDraft((value) => (value ? { ...value, ...patch } : value))
+    setInlineDraft((value) => {
+      if (!value) return value
+      const next = { ...value, ...patch }
+      return next
+    })
     setInlineErrors((value) => {
       const next = { ...value }
       if (typeof patch.start === 'string') delete next.start
@@ -724,11 +878,26 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
       return next
     })
   }
+  const resizeInlineContentEditor = useCallback((element?: HTMLTextAreaElement): void => {
+    const textarea = element ?? inlineContentRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    const nextHeight = Math.min(Math.max(72, textarea.scrollHeight), 360)
+    textarea.style.height = `${nextHeight}px`
+    textarea.style.overflowY = textarea.scrollHeight > 360 ? 'auto' : 'hidden'
+  }, [])
+  useEffect(() => {
+    if (!inlineDraft || inlineDraft.rowId !== selectedId) return
+    requestAnimationFrame(() => resizeInlineContentEditor())
+  }, [inlineDraft?.content, inlineDraft?.rowId, selectedId, resizeInlineContentEditor])
   const selectRow = (row: ScriptRow): void => {
     setSelectedId(row.id)
     setInlineDraft(loadDraftFromRow(row))
     setInlineErrors({})
     mediaRef.current?.seek(row.startMs / 1000)
+    requestAnimationFrame(() => {
+      resizeInlineContentEditor()
+    })
   }
   const applyInlineDraft = useCallback((): boolean => {
     if (!inlineDraft) return true
@@ -777,10 +946,13 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     const requested = Math.round(playhead * 1000 / 1000) * 1000
     const point = requested > row.startMs && requested < row.endMs ? requested : midpoint
     if (point <= row.startMs || point >= row.endMs) return
+    const rowText = inlineDraft?.rowId === row.id ? inlineDraft.content : row.content
+    const [left, right] = splitTextForDurationPoint(rowText, row.startMs, row.endMs, point)
+    const nextSegments = splitSourceSegments(row.sourceSegmentIds, row, point)
     const next = [...rows]
     next.splice(index, 1,
-      { ...row, id: crypto.randomUUID(), endMs: point, reviewed: true },
-      { ...row, id: crypto.randomUUID(), startMs: point, reviewed: true }
+      { ...row, id: crypto.randomUUID(), endMs: point, reviewed: true, content: left, sourceSegmentIds: nextSegments[0] },
+      { ...row, id: crypto.randomUUID(), startMs: point, reviewed: true, content: right, sourceSegmentIds: nextSegments[1] }
     )
     applyRows(next)
     setSelectedId(next[index].id)
@@ -1005,6 +1177,11 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
       }
     })()
   }
+  const openCurrentYoutubeInBrowser = (): void => {
+    const youtubeId = project.source.youtubeVideoId ?? videoIdFromUrl(project.source.uri)
+    if (!youtubeId) return
+    void window.screenScript.openExternalUrl(`https://www.youtube.com/watch?v=${youtubeId}`)
+  }
 
   return (
     <div className="review-page">
@@ -1025,6 +1202,9 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
         <aside className="media-panel">
           <MediaPlayer ref={mediaRef} project={project} onTime={setPlayhead} onError={setMediaError} onReady={() => setMediaError('')} />
           {mediaError && <p className="media-error">{mediaError}</p>}
+          {project.source.kind === 'youtube' && mediaError && (
+            <button className="secondary-button" onClick={openCurrentYoutubeInBrowser}>브라우저에서 직접 열기</button>
+          )}
           <div className="playhead-card"><span>현재 재생 위치</span><strong>{formatTimecode(playhead * 1000)}</strong></div>
           {selected && (
             <div className="edit-card">
@@ -1173,12 +1353,16 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                           {isEditing ? (
                             <textarea
                               className="inline-content-editor"
+                              ref={inlineContentRef}
                               value={draft?.content ?? row.content}
                               onChange={(event) => {
                                 updateInlineDraft({ content: event.target.value })
+                                resizeInlineContentEditor(event.target)
+                              }}
+                              onFocus={(event) => {
+                                resizeInlineContentEditor(event.target)
                               }}
                               onBlur={() => void applyInlineDraft()}
-                              rows={3}
                             />
                           ) : (
                             <div className="content-display">{row.content}</div>

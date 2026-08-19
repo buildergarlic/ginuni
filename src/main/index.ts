@@ -299,6 +299,13 @@ function registerIpc(): void {
     if (!url) throw new Error('지원하지 않는 외부 링크입니다.')
     await shell.openExternal(url)
   })
+  ipcMain.handle('app:open-external-url', async (_event, rawUrl: string) => {
+    const parsed = new URL(rawUrl)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('지원하지 않는 URL입니다.')
+    }
+    await shell.openExternal(parsed.toString())
+  })
   ipcMain.handle('app:check-for-updates', () => checkForAppUpdates())
   ipcMain.handle('app:install-update', () => installAppUpdate())
   ipcMain.handle('app:close-response', (_event, allow: boolean) => {
