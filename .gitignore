@@ -11,6 +11,7 @@ resources/bin/**/*.exe
 resources/bin/**/*.dll
 resources/bin/**/*.download
 resources/bin/whisper/*.bin
+resources/bin/sherpa/models/*.onnx
 resources/whisper-bin-*.zip
 resources/whisper-v*/
 *.log

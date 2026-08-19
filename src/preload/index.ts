@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AppApi, CreateProjectInput, ExternalLinkTarget, ModelDownloadProgress, ProcessingProgress, ScriptRow, TranscriptionEngine, UpdateStatus } from '@shared/types'
+import type { AppApi, CreateProjectInput, ExternalLinkTarget, LocalDiarizationConfig, ModelDownloadProgress, ProcessingProgress, ScriptRow, TranscriptionEngine, UpdateStatus } from '@shared/types'
 
 const api: AppApi = {
   bootstrap: () => ipcRenderer.invoke('app:bootstrap'),
@@ -9,6 +9,7 @@ const api: AppApi = {
   saveRows: (id: string, rows: ScriptRow[]) => ipcRenderer.invoke('project:save-rows', id, rows),
   exportSrt: (id: string) => ipcRenderer.invoke('project:export-srt', id),
   setTranscriptionEngine: (id: string, engine: TranscriptionEngine) => ipcRenderer.invoke('project:set-engine', id, engine),
+  setLocalDiarizationConfig: (id: string, config: LocalDiarizationConfig) => ipcRenderer.invoke('project:set-local-diarization', id, config),
   processProject: (id: string) => ipcRenderer.invoke('project:process', id),
   cancelProcessing: (id: string) => ipcRenderer.invoke('project:cancel', id),
   deleteProject: (id: string) => ipcRenderer.invoke('project:delete', id),

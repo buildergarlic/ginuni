@@ -23,6 +23,18 @@ interface WhisperJsonResult {
   transcription?: WhisperJsonSegment[]
 }
 
+export interface WhisperWord {
+  startMs: number
+  endMs: number
+  text: string
+  mappingIndex?: number
+}
+
+export interface LocalWhisperDetailedResult {
+  segments: TranscriptSegment[]
+  words: WhisperWord[]
+}
+
 export interface VadMapping {
   originalStartMs: number
   originalEndMs: number
@@ -113,10 +125,52 @@ export function parseWhisperJson(value: WhisperJsonResult, mappings: VadMapping[
     .filter((segment) => segment.endMs > segment.startMs)
 }
 
+function nearestMappingIndex(midpoint: number, mappings: VadMapping[]): number {
+  const containing = mappings.findIndex((mapping) => midpoint >= mapping.compressedStartMs && midpoint <= mapping.compressedEndMs)
+  if (containing >= 0) return containing
+  return mappings.reduce((best, mapping, index) => {
+    const distance = Math.min(Math.abs(midpoint - mapping.compressedStartMs), Math.abs(midpoint - mapping.compressedEndMs))
+    const current = mappings[best]
+    const bestDistance = Math.min(Math.abs(midpoint - current.compressedStartMs), Math.abs(midpoint - current.compressedEndMs))
+    return distance < bestDistance ? index : best
+  }, 0)
+}
+
+export function parseWhisperWords(value: WhisperJsonResult, mappings: VadMapping[] = []): WhisperWord[] {
+  const words: WhisperWord[] = []
+  for (const token of (value.transcription ?? []).flatMap((segment) => segment.tokens ?? [])) {
+    const text = token.text ?? ''
+    const from = token.offsets?.from
+    const to = token.offsets?.to
+    if (!text || /^\[_.*\]$/.test(text) || !Number.isFinite(from) || !Number.isFinite(to)) continue
+    if (mappings.length === 0) {
+      words.push({ startMs: Math.max(0, Math.round(from!)), endMs: Math.max(0, Math.round(to!)), text })
+      continue
+    }
+    const mappingIndex = nearestMappingIndex((from! + to!) / 2, mappings)
+    const mapping = mappings[mappingIndex]
+    const mapOffset = (offset: number): number => Math.max(
+      mapping.originalStartMs,
+      Math.min(mapping.originalEndMs, mapping.originalStartMs + offset - mapping.compressedStartMs)
+    )
+    words.push({
+      startMs: Math.round(mapOffset(from!)),
+      endMs: Math.round(mapOffset(to!)),
+      text,
+      mappingIndex
+    })
+  }
+  return words
+}
+
 export class LocalWhisperTranscriptionProvider implements TranscriptionProvider {
   constructor(private readonly modelPath: string) {}
 
   async transcribe(request: TranscriptionRequest): Promise<TranscriptSegment[]> {
+    return (await this.transcribeDetailed(request)).segments
+  }
+
+  async transcribeDetailed(request: TranscriptionRequest): Promise<LocalWhisperDetailedResult> {
     if (freemem() < LOCAL_MODEL_REPAIR_MIN_FREE_MEMORY_BYTES) {
       throw new LocalProcessingError({
         code: 'INSUFFICIENT_MEMORY',
@@ -162,7 +216,7 @@ export class LocalWhisperTranscriptionProvider implements TranscriptionProvider 
       '-t', '1', '-ojf', '-of', fallbackBase, '-pp', '-sow', '-sns', '--no-gpu'
     ]
 
-    const runOnce = async (args: string[], base: string): Promise<TranscriptSegment[]> => {
+    const runOnce = async (args: string[], base: string): Promise<LocalWhisperDetailedResult> => {
       let progressBuffer = ''
       let result
       try {
@@ -182,7 +236,8 @@ export class LocalWhisperTranscriptionProvider implements TranscriptionProvider 
       const outputJson = `${base}.json`
       try {
         const parsed = JSON.parse(await readFile(outputJson, 'utf8')) as WhisperJsonResult
-        return parseWhisperJson(parsed, parseVadMappings(result.stderr))
+        const mappings = parseVadMappings(result.stderr)
+        return { segments: parseWhisperJson(parsed, mappings), words: parseWhisperWords(parsed, mappings) }
       } catch (error) {
         if (error instanceof SyntaxError) {
           throw new LocalProcessingError({

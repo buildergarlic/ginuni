@@ -15,6 +15,7 @@
 3. 한컴오피스 2022에서 테스트 HWPX가 복구 경고 없이 열리는지 확인합니다.
 4. `npm run dist:win`으로 NSIS 설치본을 생성합니다.
 5. 깨끗한 Windows 10/11 PC에서 설치, 실행, 제거, 한글 경로를 확인합니다.
+   `내 PC에서 분석 + 화자 분리(실험)`은 공식 4화자 샘플과 실제 한국어 다화자 영상에서 별도로 확인합니다.
 6. `CHANGELOG.md`와 `package.json` 버전을 갱신합니다.
 7. `git tag vX.Y.Z`를 만들고 원격 저장소에 푸시합니다.
 8. GitHub Actions가 설치본, 블록맵, `latest.yml`, SHA-256을 Releases에 게시했는지 확인한 뒤 베타 참여자에게 전달합니다.
@@ -76,6 +77,7 @@ Get-AuthenticodeSignature '.\ScreenDescriptionScriptMaker-X.Y.Z-Setup.exe' | For
 - 모든 자동 오류를 앱에서 수정 가능
 - HWPX가 한컴오피스 2022에서 복구 경고 없이 열림
 - Windows 10/11에서 별도 FFmpeg·Python 설치 없이 동작
+- Windows x64에서 별도 Python·API·인터넷 없이 로컬 화자 분리 실행
 
 ## 의존성 관리
 
@@ -83,3 +85,4 @@ Get-AuthenticodeSignature '.\ScreenDescriptionScriptMaker-X.Y.Z-Setup.exe' | For
 - Dependabot PR은 CI 통과 후 한 번에 하나씩 병합합니다.
 - Electron 보안 업데이트는 우선 처리합니다.
 - FFmpeg·yt-dlp 변경 시 로컬 파일과 유튜브 링크를 모두 다시 검증합니다.
+- sherpa-onnx·Pyannote·3D-Speaker 변경 시 고정 크기·SHA-256, 제3자 고지, 공식 4화자 샘플 검출을 다시 검증합니다.

@@ -2,20 +2,22 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import { DESCRIPTION_TEXT } from '@shared/constants'
 import { formatTimecode, parseTimecode } from '@shared/timecode'
 import { validateRows } from '@shared/rows'
+import { supportsSpeakerLabels as projectSupportsSpeakerLabels } from '@shared/speaker-labels'
 import type {
   BootstrapData,
   CreateProjectInput,
+  LocalDiarizationConfig,
   ModelDownloadProgress,
   ProcessingProgress,
   ProjectSummary,
   ScriptProject,
   ScriptRow,
-  TranscriptionEngine,
   UpdateStatus
 } from '@shared/types'
 
 type Screen = 'home' | 'review' | 'settings' | 'about' | 'support'
 type SourceTab = 'local' | 'youtube'
+type AnalysisPreset = 'local' | 'local-diarization' | 'openai'
 
 interface MediaHandle {
   seek(seconds: number): void
@@ -31,7 +33,12 @@ function statusLabel(status: ProjectSummary['status']): string {
 }
 
 function processingStageLabel(stage?: string): string {
-  return ({ media: '원본 파일 확인', probe: '영상 정보 확인', encoding: '음성 변환', model: '로컬 모델 준비', runtime: '분석 엔진 실행', transcription: 'Whisper 음성 분석', output: '분석 결과 읽기', building: '대본 구성' } as Record<string, string>)[stage ?? ''] ?? stage ?? ''
+  return ({ media: '원본 파일 확인', probe: '영상 정보 확인', encoding: '음성 변환', model: '로컬 모델 준비', runtime: '분석 엔진 실행', transcription: 'Whisper 음성 분석', diarizing: '로컬 화자 분리', output: '분석 결과 읽기', building: '대본 구성' } as Record<string, string>)[stage ?? ''] ?? stage ?? ''
+}
+
+function projectPreset(project: ScriptProject): AnalysisPreset {
+  if ((project.transcriptionEngine ?? 'local') === 'openai') return 'openai'
+  return project.localDiarization?.mode === 'sherpa-onnx' ? 'local-diarization' : 'local'
 }
 
 function processingResolution(code?: string): string {
@@ -211,7 +218,8 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
   const [localPath, setLocalPath] = useState('')
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [title, setTitle] = useState('')
-  const [engine, setEngine] = useState<TranscriptionEngine>('local')
+  const [preset, setPreset] = useState<AnalysisPreset>('local')
+  const [speakerCount, setSpeakerCount] = useState('auto')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -227,7 +235,11 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
       title: title.trim() || undefined,
       localPath: tab === 'local' ? localPath : undefined,
       youtubeUrl: tab === 'youtube' ? youtubeUrl.trim() : undefined,
-      transcriptionEngine: engine
+      transcriptionEngine: preset === 'openai' ? 'openai' : 'local',
+      localDiarization: {
+        mode: preset === 'local-diarization' ? 'sherpa-onnx' : 'none',
+        speakerCount: preset === 'local-diarization' && speakerCount !== 'auto' ? Number(speakerCount) : null
+      }
     }
     try {
       setBusy(true)
@@ -247,19 +259,42 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
       </div>
       <label className="field-label">음성 분석 방식</label>
       <div className="engine-options">
-        <button className={engine === 'local' ? 'active' : ''} onClick={() => setEngine('local')}>
+        <button className={preset === 'local' ? 'active' : ''} onClick={() => setPreset('local')}>
           <strong>내 PC에서 분석</strong><span>API 키·사용료 없음 · 음성 외부 전송 없음</span>
         </button>
-        <button className={engine === 'openai' ? 'active' : ''} onClick={() => setEngine('openai')}>
+        <button
+          className={preset === 'local-diarization' ? 'active' : ''}
+          disabled={!bootstrap.diarizationBundle.available}
+          title={bootstrap.diarizationBundle.available ? '' : '화자 분리 구성 요소가 손상되었습니다. 앱을 다시 설치하세요.'}
+          onClick={() => setPreset('local-diarization')}
+        >
+          <strong>내 PC + 화자 분리</strong><span>실험 기능 · API·인터넷 없이 화자 구분</span>
+        </button>
+        <button className={preset === 'openai' ? 'active' : ''} onClick={() => setPreset('openai')}>
           <strong>OpenAI로 분석</strong><span>화자 분리 지원 · API 사용료 발생</span>
         </button>
       </div>
-      {engine === 'local' && !bootstrap.localModel.installed && (
+      {preset === 'local-diarization' && (
+        <div className="diarization-options">
+          <label className="field-label">예상 화자 수</label>
+          <select value={speakerCount} onChange={(event) => setSpeakerCount(event.target.value)}>
+            <option value="auto">자동 감지</option>
+            {Array.from({ length: 9 }, (_, index) => index + 2).map((count) => <option key={count} value={count}>{count}명</option>)}
+          </select>
+          <p className="helper-text">화자 수를 알면 직접 지정하는 편이 더 안정적입니다. 결과는 검수 화면에서 수정할 수 있습니다.</p>
+        </div>
+      )}
+      {preset !== 'openai' && !bootstrap.localModel.installed && (
         <button className="model-notice" onClick={onOpenSettings}>
           <strong>{bootstrap.localModel.integrity === 'invalid' ? '로컬 모델 복구 필요' : '첫 사용 시 로컬 모델 다운로드'}</strong><span>약 181MB · 설정에서 준비할 수 있습니다 →</span>
         </button>
       )}
-      {engine === 'openai' && !bootstrap.hasApiKey && (
+      {preset === 'local-diarization' && !bootstrap.diarizationBundle.available && (
+        <button className="key-warning" onClick={onOpenSettings}>
+          <strong>화자 분리 구성 요소를 사용할 수 없습니다</strong><span>앱을 다시 설치한 뒤 상태를 확인하세요 →</span>
+        </button>
+      )}
+      {preset === 'openai' && !bootstrap.hasApiKey && (
         <button className="key-warning" onClick={onOpenSettings}>
           <strong>OpenAI 모드는 API 키가 필요합니다</strong><span>처리를 시작하기 전에 설정에서 등록하세요 →</span>
         </button>
@@ -351,13 +386,33 @@ function SettingsScreen({ bootstrap, onChanged, onBack }: {
               ? '로컬 모델 파일이 손상되어 복구가 필요합니다.'
               : '로컬 모델을 받으면 API 키 없이 사용할 수 있습니다.'}
         </div>
-        <p className="helper-text">영상 음성은 이 PC 안에서만 처리됩니다. 로컬 첫 버전은 자동 화자 분리를 하지 않으며 대사에는 화자명을 임의로 표시하지 않습니다.</p>
+        <p className="helper-text">영상 음성은 이 PC 안에서만 처리됩니다. 기본 로컬 분석은 화자명을 표시하지 않으며, 새 프로젝트에서 실험적 화자 분리를 별도로 선택할 수 있습니다.</p>
         {modelProgress && modelBusy && (
           <div className="model-progress"><div className="progress-track"><i style={{ width: `${modelProgress.percent}%` }} /></div><span>{modelProgress.percent}% · {Math.round(modelProgress.downloadedBytes / 1024 / 1024)}MB / {Math.round(modelProgress.totalBytes / 1024 / 1024)}MB</span></div>
         )}
         <div className="button-row">
           {!bootstrap.localModel.installed && <button className="primary-button" disabled={modelBusy} onClick={downloadModel}>{modelBusy ? '모델 받는 중…' : bootstrap.localModel.integrity === 'invalid' ? '로컬 모델 복구 (약 181MB)' : '로컬 모델 다운로드 (약 181MB)'}</button>}
           {bootstrap.localModel.installed && <button className="danger-button" onClick={removeModel}>로컬 모델 삭제</button>}
+        </div>
+        <hr />
+        <h2>로컬 화자 분리 <small>실험 기능</small></h2>
+        <div className="settings-status">
+          <span className={`status-dot ${bootstrap.diarizationBundle.available ? 'ok' : ''}`} />
+          {bootstrap.diarizationBundle.available
+            ? `${bootstrap.diarizationBundle.engineVersion}와 화자 모델이 준비되어 있습니다.`
+            : bootstrap.diarizationBundle.integrity === 'invalid'
+              ? '화자 분리 실행 파일 또는 모델이 손상되었습니다. 앱을 다시 설치하세요.'
+              : '화자 분리 실행 파일 또는 모델이 없습니다. 최신 설치본으로 다시 설치하세요.'}
+        </div>
+        <p className="helper-text">Pyannote segmentation 3.0과 3D-Speaker 모델을 사용합니다. 모델은 설치본에 포함되며 음성은 외부로 전송되지 않습니다.</p>
+        <div className="component-list">
+          {bootstrap.diarizationBundle.components.map((component) => (
+            <div key={component.id}>
+              <span className={`status-dot ${component.integrity === 'valid' ? 'ok' : ''}`} />
+              <strong>{component.name}</strong>
+              <small>{component.integrity === 'valid' ? '정상' : component.integrity === 'missing' ? '없음' : '손상'}</small>
+            </div>
+          ))}
         </div>
         <hr />
         <h2>OpenAI로 분석 <small>선택 사항</small></h2>
@@ -526,8 +581,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   const selectedIndex = rows.findIndex((row) => row.id === selectedId)
   const selected = rows[selectedIndex]
   const latestRun = project.runs.at(-1)
-  const latestSuccessfulProvider = project.runs.filter((run) => run.completedAt && !run.errorCode).at(-1)?.provider
-  const supportsSpeakerLabels = (latestSuccessfulProvider ?? project.transcriptionEngine) === 'openai'
+  const supportsSpeakerLabels = projectSupportsSpeakerLabels(project)
 
   useEffect(() => {
     rowsRef.current = project.rows
@@ -748,6 +802,20 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
         </aside>
 
         <main className="script-panel">
+          {!project.lastError && (latestRun?.warnings?.length ?? 0) > 0 && (
+            <div className="project-warning-banner">
+              <div>
+                <strong>{latestRun?.diarization?.status === 'fallback' ? '화자 분리 안내' : '분석 안내'}</strong>
+                {latestRun?.warnings?.map((warning) => <span key={`${warning.code}:${warning.message}`}>{warning.message}</span>)}
+                {latestRun?.diarization?.status === 'fallback' && <p>대사 인식은 완료했으며 화자 표기 없이 검수·HWPX·SRT 작업을 계속할 수 있습니다.</p>}
+                <div className="error-actions">
+                  <button className="secondary-button compact-action" onClick={onRetry}>다시 분석</button>
+                  <button className="secondary-button compact-action" onClick={exportDiagnostics}>진단 파일 저장</button>
+                </div>
+              </div>
+              <small>{latestRun?.warnings?.map((warning) => warning.code).join(' · ')}</small>
+            </div>
+          )}
           {project.lastError && (
             <div className="project-error-banner">
               <div>
@@ -864,10 +932,30 @@ export default function App() {
       setNotice(localModel.installed ? '로컬 모델 복구가 완료되었습니다.' : '로컬 모델을 복구하지 못했습니다. 설정에서 다시 시도하세요.')
     } catch (cause) { setNotice(errorMessage(cause)) }
   }
-  const changeEngine = async (engine: TranscriptionEngine): Promise<void> => {
+  const changePreset = async (preset: AnalysisPreset): Promise<void> => {
     if (!project) return
-    try { setProject(await window.screenScript.setTranscriptionEngine(project.id, engine)) }
+    try {
+      const engine = preset === 'openai' ? 'openai' : 'local'
+      let updated = await window.screenScript.setTranscriptionEngine(project.id, engine)
+      if (engine === 'local') {
+        const config: LocalDiarizationConfig = {
+          mode: preset === 'local-diarization' ? 'sherpa-onnx' : 'none',
+          speakerCount: preset === 'local-diarization' ? updated.localDiarization?.speakerCount ?? null : null
+        }
+        updated = await window.screenScript.setLocalDiarizationConfig(project.id, config)
+      }
+      setProject(updated)
+    }
     catch (cause) { setNotice(errorMessage(cause)) }
+  }
+  const changeSpeakerCount = async (value: string): Promise<void> => {
+    if (!project) return
+    try {
+      setProject(await window.screenScript.setLocalDiarizationConfig(project.id, {
+        mode: 'sherpa-onnx',
+        speakerCount: value === 'auto' ? null : Number(value)
+      }))
+    } catch (cause) { setNotice(errorMessage(cause)) }
   }
   const removeProject = async (summary: ProjectSummary): Promise<void> => {
     if (!window.confirm(`“${summary.title}” 프로젝트와 내려받은 음성을 삭제할까요?`)) return
@@ -914,11 +1002,18 @@ export default function App() {
         />
         {project.status !== 'review' && project.status !== 'exported' && (
           <>
-            <select className="floating-engine" value={project.transcriptionEngine ?? 'openai'} onChange={(event) => changeEngine(event.target.value as TranscriptionEngine)}>
-              <option value="local">내 PC에서 분석 (API 없음)</option>
+            {projectPreset(project) === 'local-diarization' && (
+              <select className="floating-speaker-count" value={project.localDiarization.speakerCount ?? 'auto'} onChange={(event) => void changeSpeakerCount(event.target.value)}>
+                <option value="auto">화자 수 자동</option>
+                {Array.from({ length: 9 }, (_, index) => index + 2).map((count) => <option key={count} value={count}>화자 {count}명</option>)}
+              </select>
+            )}
+            <select className="floating-engine" value={projectPreset(project)} onChange={(event) => void changePreset(event.target.value as AnalysisPreset)}>
+              <option value="local">내 PC에서 분석</option>
+              <option value="local-diarization" disabled={!bootstrap.diarizationBundle.available}>내 PC + 화자 분리 (실험)</option>
               <option value="openai">OpenAI로 분석 (화자 분리)</option>
             </select>
-            <button className="floating-process" onClick={startProcessing}>{(project.transcriptionEngine ?? 'openai') === 'local' ? '로컬 음성 분석 시작' : 'OpenAI 음성 분석 시작'}</button>
+            <button className="floating-process" onClick={startProcessing}>{projectPreset(project) === 'openai' ? 'OpenAI 음성 분석 시작' : projectPreset(project) === 'local-diarization' ? '로컬 화자 분석 시작' : '로컬 음성 분석 시작'}</button>
           </>
         )}
         <button className="floating-settings" onClick={() => openAuxiliary('settings')}>설정</button>
