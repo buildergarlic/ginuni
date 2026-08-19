@@ -1,4 +1,4 @@
-import { type MouseEvent as ReactMouseEvent, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { type MouseEvent as ReactMouseEvent, forwardRef, type ReactElement, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { DESCRIPTION_TEXT } from '@shared/constants'
 import { formatTimecode, parseTimecode } from '@shared/timecode'
 import { validateRows } from '@shared/rows'
@@ -15,7 +15,7 @@ import type {
   UpdateStatus
 } from '@shared/types'
 
-type Screen = 'home' | 'review' | 'settings' | 'about' | 'support'
+type Screen = 'home' | 'review' | 'settings' | 'about' | 'support' | 'guide'
 type SourceTab = 'local' | 'youtube'
 type AnalysisPreset = 'local' | 'local-diarization' | 'openai'
 type YoutubeEmbedMode = 'nocookie' | 'youtube'
@@ -158,6 +158,79 @@ function youtubeErrorMessage(code: number | undefined): string {
   return '이 영상 재생 중 오류가 발생했습니다.'
 }
 
+type TimeIssueType = 'invalid-range' | 'empty-content' | 'overlap'
+
+type TimeIssue = {
+  rowId: string
+  rowIndex: number
+  startMs: number
+  endMs: number
+  type: TimeIssueType
+  message: string
+  resolution: string
+}
+
+function collectTimeIssues(rows: ScriptRow[]): TimeIssue[] {
+  const issues: TimeIssue[] = []
+  const sorted = [...rows].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)
+  const indexById = new Map<string, number>()
+  rows.forEach((row, index) => {
+    indexById.set(row.id, index + 1)
+  })
+
+  let previous: ScriptRow | undefined
+  for (const row of sorted) {
+    const rowIndex = indexById.get(row.id) ?? 0
+
+    if (row.startMs < 0 || row.endMs <= row.startMs) {
+      issues.push({
+        rowId: row.id,
+        rowIndex,
+        startMs: row.startMs,
+        endMs: row.endMs,
+        type: 'invalid-range',
+        message: `${rowIndex}행: 시작/종료 시간이 올바르지 않습니다.`,
+        resolution: '시작을 종료보다 먼저, 종료는 시작 + 1초 이상으로 넣어 주세요.'
+      })
+    }
+
+    if (!row.content.trim()) {
+      issues.push({
+        rowId: row.id,
+        rowIndex,
+        startMs: row.startMs,
+        endMs: row.endMs,
+        type: 'empty-content',
+        message: `${rowIndex}행: 내용이 비어 있습니다.`,
+        resolution: '해당 행의 내용에 최소 1글자 이상 입력하세요.'
+      })
+    }
+
+    if (previous && row.startMs < previous.endMs) {
+      const prevIndex = indexById.get(previous.id) ?? 0
+      issues.push({
+        rowId: row.id,
+        rowIndex,
+        startMs: row.startMs,
+        endMs: row.endMs,
+        type: 'overlap',
+        message: `${prevIndex}행과 ${rowIndex}행의 시간대가 겹칩니다.`,
+        resolution: `첫 행 종료(${formatTimecode(previous.endMs)}) 이전으로 다음 행 시작 또는 이전 행 종료를 조정해 겹침을 해제하세요.`
+      })
+    }
+
+    previous = row
+  }
+
+  return issues
+}
+
+function formatTimeIssueSummary(count: number): string {
+  if (count <= 0) return '시간 오류 0개'
+  if (count === 1) return '시간 오류 1개'
+  return `시간 오류 ${count}개`
+}
+
 function youtubeBlockMessage(videoId: string): string {
   return `로그인하여 봇이 아님을 확인하세요.\n영상 ID: ${videoId}`
 }
@@ -222,6 +295,11 @@ const MediaPlayer = forwardRef<MediaHandle, {
     const videoRef = useRef<HTMLVideoElement>(null)
     const iframeRef = useRef<HTMLIFrameElement>(null)
     const pendingSeekRef = useRef<number | null>(null)
+    const lastSyncSecondsRef = useRef<number>(0)
+    const activeSeekTargetRef = useRef<number | null>(null)
+    const youtubeReadyRef = useRef(false)
+    const syncRetryTimerRef = useRef<number | null>(null)
+    const pendingSyncAttemptsRef = useRef(0)
     const readyRef = useRef(false)
     const youtubeId = project.source.youtubeVideoId ?? videoIdFromUrl(project.source.uri)
     const [youtubeMode, setYoutubeMode] = useState<YoutubeEmbedMode>('nocookie')
@@ -245,10 +323,57 @@ const MediaPlayer = forwardRef<MediaHandle, {
       }
     }
 
+    const clearYoutubeRetry = (): void => {
+      if (syncRetryTimerRef.current) {
+        window.clearTimeout(syncRetryTimerRef.current)
+        syncRetryTimerRef.current = null
+      }
+    }
+
+    const sendYoutubeSeek = (seconds: number): void => {
+      if (!iframeRef.current?.contentWindow) return
+      iframeRef.current.contentWindow.postMessage(
+        JSON.stringify({ event: 'command', func: 'seekTo', args: [seconds, true] }),
+        iframeOrigin
+      )
+    }
+
+    const requestYoutubeInfo = (): void => {
+      if (!iframeRef.current?.contentWindow) return
+      iframeRef.current.contentWindow.postMessage(
+        JSON.stringify({ event: 'listening', id: 'screen-description-player', channel: 'info' }),
+        iframeOrigin
+      )
+    }
+
+    const scheduleYoutubeSyncRecheck = (targetSeconds: number): void => {
+      clearYoutubeRetry()
+      const attempt = pendingSyncAttemptsRef.current
+      syncRetryTimerRef.current = window.setTimeout(() => {
+        if (project.source.kind !== 'youtube') return
+        if (!iframeRef.current?.contentWindow) return
+        const delta = Math.abs(lastSyncSecondsRef.current - targetSeconds)
+        if (delta <= 0.6 || attempt >= 3) {
+          activeSeekTargetRef.current = null
+          clearYoutubeRetry()
+          return
+        }
+        pendingSyncAttemptsRef.current = attempt + 1
+        sendYoutubeSeek(targetSeconds)
+        requestYoutubeInfo()
+        scheduleYoutubeSyncRecheck(targetSeconds)
+      }, 650)
+    }
+
     useEffect(() => {
       setYoutubeMode('nocookie')
       setYoutubeFallbackUsed(false)
+      youtubeReadyRef.current = false
       readyRef.current = false
+      clearYoutubeRetry()
+      pendingSeekRef.current = null
+      activeSeekTargetRef.current = null
+      pendingSyncAttemptsRef.current = 0
     }, [youtubeId])
 
     useImperativeHandle(ref, () => ({
@@ -257,10 +382,11 @@ const MediaPlayer = forwardRef<MediaHandle, {
         onTime(safeSeconds)
         seekLocalVideo(safeSeconds)
         if (project.source.kind === 'youtube' && iframeRef.current?.contentWindow) {
-          iframeRef.current.contentWindow.postMessage(
-            JSON.stringify({ event: 'command', func: 'seekTo', args: [safeSeconds, true] }),
-            iframeOrigin
-          )
+          activeSeekTargetRef.current = safeSeconds
+          pendingSyncAttemptsRef.current = 0
+          if (youtubeReadyRef.current) sendYoutubeSeek(safeSeconds)
+          else requestYoutubeInfo()
+          scheduleYoutubeSyncRecheck(safeSeconds)
         }
       }
     }), [iframeOrigin, onTime, project.source.kind])
@@ -286,13 +412,29 @@ const MediaPlayer = forwardRef<MediaHandle, {
         try {
           const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
           if (typeof data?.info?.currentTime === 'number') {
+            lastSyncSecondsRef.current = data.info.currentTime
             onTime(data.info.currentTime)
             if (!readyRef.current) {
               readyRef.current = true
               onReady()
+              youtubeReadyRef.current = true
               setYoutubeFallbackUsed(false)
             }
+            if (activeSeekTargetRef.current !== null) {
+              const delta = Math.abs(data.info.currentTime - activeSeekTargetRef.current)
+              if (delta <= 0.8) {
+                activeSeekTargetRef.current = null
+                clearYoutubeRetry()
+                pendingSyncAttemptsRef.current = 0
+              }
+            }
           }
+          if (data?.event === 'onReady' && activeSeekTargetRef.current !== null) {
+            youtubeReadyRef.current = true
+            sendYoutubeSeek(activeSeekTargetRef.current)
+          }
+          const isErrorEvent = data?.event === 'onError' || data?.event === 'error' || Object.prototype.hasOwnProperty.call(data, 'error') || typeof data?.info?.error !== 'undefined' || typeof data?.info?.playerError !== 'undefined'
+          if (!isErrorEvent) return
           const parsed = parseYouTubeMessage(data)
           if (!parsed.code && !parsed.message) return
           const lower = (parsed.message ?? '').toLowerCase()
@@ -310,15 +452,15 @@ const MediaPlayer = forwardRef<MediaHandle, {
         }
       }
       const timer = window.setInterval(() => {
-        iframeRef.current?.contentWindow?.postMessage(
-          JSON.stringify({ event: 'listening', id: 'screen-description-player', channel: 'info' }),
-          iframeOrigin
-        )
+        requestYoutubeInfo()
       }, 500)
       window.addEventListener('message', receive)
       return () => {
         window.removeEventListener('message', receive)
         window.clearInterval(timer)
+        clearYoutubeRetry()
+        activeSeekTargetRef.current = null
+        pendingSyncAttemptsRef.current = 0
       }
     }, [iframeOrigin, onTime, onError, youtubeFallbackUsed, youtubeId, project.source.kind, youtubeMode])
 
@@ -711,6 +853,131 @@ function SupportScreen({ bootstrap, onBack, onAbout }: {
   )
 }
 
+const guideSteps = [
+  {
+    title: '1) 프로젝트 만들기',
+    detail: '왼쪽의 “새 대본 만들기”에서 로컬 영상 파일을 선택하거나 유튜브 링크를 붙여넣으세요. 기본은 로컬 분석(API 키 없음)입니다.',
+    imageTitle: '입력 화면'
+  },
+  {
+    title: '2) 분석 시작',
+    detail: '분석 버튼을 누르면 음성 전사가 끝난 뒤 타임코드가 붙은 행이 생성됩니다. OpenAI를 쓰려면 설정에서 키를 저장하고 모드를 변경하세요.',
+    imageTitle: '분석 진행'
+  },
+  {
+    title: '3) 검수 화면 사용',
+    detail: '표의 행을 클릭하면 영상이 해당 구간으로 이동합니다. 시작·종료는 MM:SS로 수정하고, 줄바꿈은 그대로 유지됩니다. 텍스트/분할/병합/삭제는 즉시 가능합니다.',
+    imageTitle: '검수와 동기화'
+  },
+  {
+    title: '4) “시간 오류” 처리',
+    detail: '오른쪽 상단에 “시간 오류 n개”가 뜨면 HWPX/SRT 내보내기가 비활성됩니다. 오류 항목을 클릭해 바로 해당 행으로 이동하고 시간 범위를 수정하세요.',
+    imageTitle: '오류로 바로 이동'
+  },
+  {
+    title: '5) 결과 저장',
+    detail: '문제없는 행만 남으면 HWPX와 SRT로 각각 내보내기 할 수 있습니다. 동일 폴더에서 V01, V02처럼 버전이 늘어납니다.',
+    imageTitle: '내보내기'
+  }
+] as const
+
+function guideVisual(label: string): ReactElement {
+  if (label === '입력 화면') {
+    return (
+      <svg viewBox="0 0 640 170" className="guide-svg" role="img" aria-label="입력 화면 안내">
+        <rect x="14" y="18" width="612" height="136" rx="12" fill="#f8faf8" stroke="#cbd7d3" />
+        <rect x="30" y="34" width="220" height="44" fill="#fff" stroke="#9bb7b0" />
+        <text x="42" y="58" fill="#3f5852" fontSize="14">새 대본 만들기</text>
+        <circle cx="560" cy="56" r="14" fill="#a23f33" />
+        <text x="553" y="60" fill="#fff" fontSize="12">+</text>
+        <rect x="30" y="90" width="560" height="48" fill="#eef5f2" stroke="#c8d5d0" />
+        <text x="42" y="118" fill="#49625d" fontSize="13">영상 선택 / 유튜브 링크 입력</text>
+        <text x="40" y="150" fill="#6d7d78" fontSize="11">처음 사용자는 로컬 분석(기본)으로 시작</text>
+      </svg>
+    )
+  }
+  if (label === '분석 진행') {
+    return (
+      <svg viewBox="0 0 640 170" className="guide-svg" role="img" aria-label="분석 진행 안내">
+        <rect x="14" y="18" width="612" height="136" rx="12" fill="#f3f9f3" stroke="#c9d8d2" />
+        <rect x="30" y="36" width="370" height="26" fill="#ffffff" stroke="#bfcfc9" />
+        <rect x="30" y="74" width="300" height="26" fill="#e8f2ed" stroke="#a1c2b6" />
+        <text x="40" y="54" fill="#3f5852" fontSize="12">영상 처리 중</text>
+        <text x="40" y="91" fill="#3f5852" fontSize="12">전사·행 구성</text>
+        <rect x="460" y="36" width="118" height="44" rx="8" fill="#f3b64d" />
+        <text x="483" y="65" fill="#233c35" fontSize="12">진행률</text>
+      </svg>
+    )
+  }
+  if (label === '검수와 동기화') {
+    return (
+      <svg viewBox="0 0 640 170" className="guide-svg" role="img" aria-label="검수와 동기화 안내">
+        <rect x="14" y="18" width="612" height="136" rx="12" fill="#f4f9f6" stroke="#cbd9d4" />
+        <rect x="30" y="36" width="340" height="88" fill="#fff" stroke="#d2ded9" />
+        <line x1="30" y1="90" x2="370" y2="90" stroke="#d5e1dc" strokeWidth="2" />
+        <rect x="404" y="34" width="206" height="90" fill="#132f29" rx="8" />
+        <polygon points="404,74 374,74 390,64 390,84" fill="#132f29" />
+        <rect x="432" y="57" width="140" height="16" fill="#3f6f65" />
+        <text x="446" y="69" fill="#eaf3ef" fontSize="12">유튜브 동기화</text>
+      </svg>
+    )
+  }
+  if (label === '오류로 바로 이동') {
+    return (
+      <svg viewBox="0 0 640 170" className="guide-svg" role="img" aria-label="시간 오류 바로 이동 안내">
+        <rect x="14" y="18" width="612" height="136" rx="12" fill="#fff7f5" stroke="#e0c3be" />
+        <text x="32" y="52" fill="#8d3d34" fontSize="14">시간 오류 2개</text>
+        <rect x="28" y="64" width="230" height="28" fill="#ffd6cd" stroke="#e1a196" />
+        <text x="36" y="83" fill="#7b2921" fontSize="11">1행: 시간이 겹칩니다</text>
+        <rect x="280" y="64" width="230" height="28" fill="#ffd6cd" stroke="#e1a196" />
+        <text x="288" y="83" fill="#7b2921" fontSize="11">3행: 시작/종료 역전</text>
+        <text x="38" y="118" fill="#5f5a58" fontSize="11">오류 항목의 [행으로 이동] 버튼을 눌러 바로 수정</text>
+      </svg>
+    )
+  }
+  return (
+    <svg viewBox="0 0 640 170" className="guide-svg" role="img" aria-label="내보내기 안내">
+      <rect x="14" y="18" width="612" height="136" rx="12" fill="#f8faf8" stroke="#c5d1cc" />
+      <rect x="28" y="40" width="220" height="30" fill="#eaf5ee" stroke="#a8c9be" />
+      <rect x="268" y="40" width="220" height="30" fill="#eaf5ee" stroke="#a8c9be" />
+      <text x="52" y="60" fill="#2d5c4f" fontSize="12">HWPX 내보내기</text>
+      <text x="295" y="60" fill="#2d5c4f" fontSize="12">SRT 내보내기</text>
+      <rect x="28" y="90" width="460" height="34" fill="#e4e1d5" stroke="#cec7b4" />
+      <text x="42" y="112" fill="#574f42" fontSize="12">버전은 V01, V02… 자동 증가합니다</text>
+    </svg>
+  )
+}
+
+function GuideScreen({ onBack }: { onBack: () => void }) {
+  return (
+    <main className="info-page guide-page">
+      <button className="back-button" onClick={onBack}>← 돌아가기</button>
+      <section className="guide-card">
+        <span className="eyebrow">USER GUIDE</span>
+        <h1>GiNuNi 사용법</h1>
+        <p className="info-lead">
+          이 화면은 처음 사용하는 분도 바로 시작할 수 있도록 “프로젝트 생성 → 분석 → 검수 → 내보내기” 과정을 단계별로 보여줍니다.
+          어려운 용어는 아래 단계 설명에서 피해서 정리했습니다.
+        </p>
+        <div className="guide-list">
+          {guideSteps.map((step) => (
+            <article key={step.title} className="guide-step-card">
+              <h2>{step.title}</h2>
+              <p>{step.detail}</p>
+              <div className="guide-image">{guideVisual(step.imageTitle)}</div>
+              <small>{step.imageTitle}</small>
+            </article>
+          ))}
+        </div>
+        <p className="guide-note">
+          <strong>팁</strong>: 시간 오류가 있을 때는 내보내기가 잠깐 멈춥니다. 오류 항목을 누르면 수정 화면으로 바로 이동해서 시작/종료를 바로잡을 수 있습니다.
+          유튜브의 2차원/제한 영상은 보안 경고가 생길 수 있으니 “현재 위치로 이동”이 동작하는지 먼저 확인하세요.
+        </p>
+      </section>
+    </main>
+  )
+}
+
 type InlineRowDraft = {
   rowId: string
   start: string
@@ -755,6 +1022,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   const savedVersionRef = useRef(0)
   const savePromiseRef = useRef<Promise<void> | null>(null)
   const errors = useMemo(() => validateRows(rows), [rows])
+  const timeIssues = useMemo(() => collectTimeIssues(rows), [rows])
   const selectedIndex = rows.findIndex((row) => row.id === selectedId)
   const contextMenuIndex = contextMenu ? rows.findIndex((row) => row.id === contextMenu.rowId) : -1
   const contextMenuRow = contextMenu ? rows.find((row) => row.id === contextMenu.rowId) ?? null : null
@@ -899,6 +1167,11 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     requestAnimationFrame(() => {
       resizeInlineContentEditor()
     })
+  }
+  const jumpToTimeIssue = (issue: TimeIssue): void => {
+    const row = rows.find((entry) => entry.id === issue.rowId)
+    if (!row) return
+    void chooseRow(row)
   }
   const applyInlineDraft = useCallback((): boolean => {
     if (!inlineDraft) return true
@@ -1312,8 +1585,26 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
           )}
           <div className="script-toolbar">
             <div><h2>대본 검수</h2><p>{rows.length}개 행 · 행을 누르면 해당 시점으로 이동합니다.</p></div>
-            {errors.length > 0 && <span className="validation-pill">{errors.length}개 시간 오류</span>}
+            {timeIssues.length > 0 && <span className="validation-pill">{formatTimeIssueSummary(timeIssues.length)}</span>}
           </div>
+          {timeIssues.length > 0 && (
+            <div className="time-error-panel">
+              <h3>{formatTimeIssueSummary(timeIssues.length)}</h3>
+              <p>시작/종료 시간 구간 오류 때문에 HWPX 내보내기와 SRT 내보내기가 현재 비활성입니다. 아래 항목을 클릭해 해당 행으로 바로 이동해 수정하세요.</p>
+              <ul>
+                {timeIssues.map((issue) => (
+                  <li key={`${issue.rowId}:${issue.type}`}>
+                    <div className="time-error-text">
+                      <strong>{issue.type === 'overlap' ? '겹침' : issue.type === 'empty-content' ? '빈 내용' : '시간 범위 오류'}</strong>
+                      <span>{issue.message}</span>
+                    </div>
+                    <button className="compact-action secondary-button" onClick={() => jumpToTimeIssue(issue)}>행으로 이동</button>
+                    <small>{issue.resolution}</small>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="table-wrap">
             <table className="script-table">
               <thead><tr><th>분류</th><th>시작</th><th>종료</th><th>간격</th><th>화자/내용</th><th>검수</th></tr></thead>
@@ -1516,7 +1807,7 @@ export default function App() {
     if (!window.confirm(`“${summary.title}” 프로젝트와 내려받은 음성을 삭제할까요?`)) return
     try { await window.screenScript.deleteProject(summary.id); await refresh() } catch (cause) { setNotice(errorMessage(cause)) }
   }
-  const openAuxiliary = (target: 'settings' | 'about' | 'support'): void => {
+  const openAuxiliary = (target: 'settings' | 'about' | 'support' | 'guide'): void => {
     setReturnScreen(screen === 'review' && project ? 'review' : 'home')
     setScreen(target)
   }
@@ -1539,6 +1830,7 @@ export default function App() {
   if (screen === 'settings') return <><SettingsScreen bootstrap={bootstrap} onChanged={setBootstrap} onBack={closeAuxiliary} />{updateBanner}</>
   if (screen === 'about') return <><AboutScreen bootstrap={bootstrap} updateStatus={currentUpdateStatus} onBack={closeAuxiliary} onSupport={() => setScreen('support')} onCheckUpdate={() => void checkUpdates()} onInstallUpdate={() => void applyUpdate()} />{updateBanner}</>
   if (screen === 'support') return <><SupportScreen bootstrap={bootstrap} onBack={closeAuxiliary} onAbout={() => setScreen('about')} />{updateBanner}</>
+  if (screen === 'guide') return <><GuideScreen onBack={closeAuxiliary} />{updateBanner}</>
   if (screen === 'review' && project) {
     return (
       <>
@@ -1588,6 +1880,7 @@ export default function App() {
         <nav>
           <button className="active">프로젝트</button>
           <button onClick={() => openAuxiliary('settings')}>설정</button>
+          <button onClick={() => openAuxiliary('guide')}>사용법</button>
           <button onClick={() => openAuxiliary('about')}>About GiNuNi</button>
           <button className="nav-sponsor" onClick={() => openAuxiliary('support')}>♥ 개발자 후원</button>
         </nav>
