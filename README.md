@@ -4,7 +4,7 @@
 
 ## 최신 버전 다운로드
 
-[화면해설 대본 도구 v0.4.0-beta.6 설치 파일 내려받기](https://github.com/buildergarlic/ginuni/releases/download/v0.4.0-beta.6/ScreenDescriptionScriptMaker-0.4.0-beta.6-Setup.exe)
+[화면해설 대본 도구 v0.4.0-beta.7 설치 파일 내려받기](https://github.com/buildergarlic/ginuni/releases/download/v0.4.0-beta.7/ScreenDescriptionScriptMaker-0.4.0-beta.7-Setup.exe)
 
 - Windows 10/11용 설치 파일이며 약 198MB입니다.
 - 새 버전과 체크섬은 [GiNuNi Releases](https://github.com/buildergarlic/ginuni/releases)에서 확인할 수 있습니다.
@@ -12,7 +12,7 @@
 
 ## 현재 버전
 
-- 버전: `0.4.0-beta.6`
+- 버전: `0.4.0-beta.7`
 - 운영체제: Windows 10/11
 - 입력 길이: 최대 3시간
 - 기본 언어: 한국어
@@ -32,6 +32,8 @@ AI 결과는 검수 가능한 초안입니다. 중요한 납품 전에는 반드
 6. **HWPX 내보내기**를 눌러 저장 폴더를 선택합니다.
 
 7. **SRT 내보내기**를 눌러 저장 폴더를 선택합니다. 대사 행만 저장됩니다.
+
+로컬 분석이 실패하면 오류 단계와 해결 방법을 확인할 수 있습니다. `진단 파일 저장`으로 음성·대사·API 키 없이 오류 원인을 저장해 문의할 수 있으며, 손상된 모델은 `로컬 모델 복구`로 다시 설치할 수 있습니다.
 
 앱의 **About GiNuNi**에서 버전·자동 업데이트·BuilderGarlic 연락처·GitHub 저장소를 확인할 수 있고, **개발자 후원** 메뉴에서 [BuilderGarlic GitHub Sponsors](https://github.com/sponsors/buildergarlic) 후원 단계를 선택할 수 있습니다.
 

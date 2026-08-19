@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { cpus } from 'node:os'
+import { cpus, freemem } from 'node:os'
 import { dirname, join } from 'node:path'
 import { readFile, rm } from 'node:fs/promises'
+import { LOCAL_MODEL_REPAIR_MIN_FREE_MEMORY_BYTES } from '@shared/constants'
 import type { TranscriptSegment, TranscriptionProvider, TranscriptionRequest } from '@shared/types'
+import { classifyProcessFailure, LocalProcessingError } from './processing-errors'
 import { runProcess } from './process-runner'
 import { runtimeExecutable, whisperVadModelPath } from './runtime'
 
@@ -115,47 +117,113 @@ export class LocalWhisperTranscriptionProvider implements TranscriptionProvider 
   constructor(private readonly modelPath: string) {}
 
   async transcribe(request: TranscriptionRequest): Promise<TranscriptSegment[]> {
-    const executable = await runtimeExecutable('whisper-cli')
-    const vadModel = await whisperVadModelPath()
+    if (freemem() < LOCAL_MODEL_REPAIR_MIN_FREE_MEMORY_BYTES) {
+      throw new LocalProcessingError({
+        code: 'INSUFFICIENT_MEMORY',
+        stage: 'transcription',
+        message: '현재 메모리가 부족해 로컬 음성 분석을 시작할 수 없습니다.'
+      })
+    }
+    let executable: string
+    let vadModel: string
+    try {
+      executable = await runtimeExecutable('whisper-cli')
+      vadModel = await whisperVadModelPath()
+    } catch (error) {
+      throw new LocalProcessingError({
+        code: 'RUNTIME_BLOCKED',
+        stage: 'runtime',
+        message: '로컬 음성 분석 실행 파일 또는 VAD 모델을 찾지 못했습니다. 앱을 다시 설치하거나 보안 프로그램의 차단 여부를 확인하세요.',
+        stderr: error instanceof Error ? error.message : undefined
+      })
+    }
+    if (!['x64', 'arm64'].includes(process.arch)) {
+      throw new LocalProcessingError({
+        code: 'UNSUPPORTED_ARCHITECTURE',
+        stage: 'runtime',
+        message: '이 Windows 아키텍처에서는 현재 로컬 음성 분석 엔진을 사용할 수 없습니다.'
+      })
+    }
+    try {
+      await runProcess(executable, ['--help'])
+    } catch (error) {
+      throw classifyProcessFailure(error, 'runtime')
+    }
     const outputBase = join(dirname(request.audioPath), `whisper-result-${randomUUID()}`)
-    const outputJson = `${outputBase}.json`
     const threads = Math.max(1, Math.min(8, cpus().length - 1))
-    let progressBuffer = ''
+    const primaryArgs = [
+      '-m', this.modelPath, '-f', request.audioPath, '-l', request.language,
+      '-t', String(threads), '-ojf', '-of', outputBase, '-pp', '-sow', '-sns',
+      '--no-gpu', '--vad', '-vm', vadModel, '-vsd', '500', '-vp', '100', '-vmsd', '30'
+    ]
+    const fallbackBase = `${outputBase}-fallback`
+    const fallbackArgs = [
+      '-m', this.modelPath, '-f', request.audioPath, '-l', request.language,
+      '-t', '1', '-ojf', '-of', fallbackBase, '-pp', '-sow', '-sns', '--no-gpu'
+    ]
+
+    const runOnce = async (args: string[], base: string): Promise<TranscriptSegment[]> => {
+      let progressBuffer = ''
+      let result
+      try {
+        result = await runProcess(executable, args, {
+          signal: request.signal,
+          onStderr: (value) => {
+            progressBuffer = `${progressBuffer}${value}`.slice(-2_000)
+            for (const match of progressBuffer.matchAll(/progress\s*=\s*(\d+)%/g)) {
+              request.onProgress?.(Math.min(100, Number(match[1])))
+            }
+          }
+        })
+      } catch (error) {
+        if (request.signal?.aborted) throw new DOMException('작업이 취소되었습니다.', 'AbortError')
+        throw classifyProcessFailure(error, 'transcription')
+      }
+      const outputJson = `${base}.json`
+      try {
+        const parsed = JSON.parse(await readFile(outputJson, 'utf8')) as WhisperJsonResult
+        return parseWhisperJson(parsed, parseVadMappings(result.stderr))
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          throw new LocalProcessingError({
+            code: 'WHISPER_OUTPUT_INVALID',
+            stage: 'output',
+            message: '로컬 음성인식 결과 파일을 읽을 수 없습니다.',
+            stderr: result.stderr
+          })
+        }
+        throw new LocalProcessingError({
+          code: 'WHISPER_OUTPUT_INVALID',
+          stage: 'output',
+          message: '로컬 음성인식 결과 파일이 생성되지 않았습니다.',
+          stderr: error instanceof Error ? error.message : result.stderr
+        })
+      }
+    }
 
     try {
-      const result = await runProcess(executable, [
-        '-m', this.modelPath,
-        '-f', request.audioPath,
-        '-l', request.language,
-        '-t', String(threads),
-        '-ojf',
-        '-of', outputBase,
-        '-pp',
-        '-sow',
-        '-sns',
-        '--no-gpu',
-        '--vad',
-        '-vm', vadModel,
-        '-vsd', '500',
-        '-vp', '100',
-        '-vmsd', '30'
-      ], {
-        signal: request.signal,
-        onStderr: (value) => {
-          progressBuffer = `${progressBuffer}${value}`.slice(-2_000)
-          for (const match of progressBuffer.matchAll(/progress\s*=\s*(\d+)%/g)) {
-            request.onProgress?.(Math.min(100, Number(match[1])))
-          }
+      try {
+        return await runOnce(primaryArgs, outputBase)
+      } catch (firstError) {
+        if (request.signal?.aborted) throw new DOMException('작업이 취소되었습니다.', 'AbortError')
+        const failure = firstError instanceof LocalProcessingError ? firstError : classifyProcessFailure(firstError, 'transcription')
+        if (failure.code === 'RUNTIME_BLOCKED' || failure.code === 'UNSUPPORTED_ARCHITECTURE' || failure.code === 'INSUFFICIENT_MEMORY') throw failure
+        try {
+          return await runOnce(fallbackArgs, fallbackBase)
+        } catch (secondError) {
+          const fallbackFailure = secondError instanceof LocalProcessingError ? secondError : classifyProcessFailure(secondError, 'transcription')
+          throw new LocalProcessingError({
+            code: fallbackFailure.code,
+            stage: fallbackFailure.stage,
+            message: fallbackFailure.message,
+            exitCode: fallbackFailure.exitCode ?? failure.exitCode,
+            stderr: [failure.stderrSummary, fallbackFailure.stderrSummary].filter(Boolean).join(' | ')
+          })
         }
-      })
-      const parsed = JSON.parse(await readFile(outputJson, 'utf8')) as WhisperJsonResult
-      return parseWhisperJson(parsed, parseVadMappings(result.stderr))
-    } catch (error) {
-      if (request.signal?.aborted) throw new DOMException('작업이 취소되었습니다.', 'AbortError')
-      if (error instanceof SyntaxError) throw new Error('로컬 음성인식 결과를 읽을 수 없습니다.')
-      throw new Error('로컬 음성 분석에 실패했습니다. 모델을 다시 설치하거나 다른 영상을 확인하세요.')
+      }
     } finally {
-      await rm(outputJson, { force: true })
+      await rm(`${outputBase}.json`, { force: true })
+      await rm(`${fallbackBase}.json`, { force: true })
     }
   }
 }

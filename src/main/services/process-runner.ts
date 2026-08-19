@@ -3,6 +3,19 @@ import { spawn } from 'node:child_process'
 export interface RunResult {
   stdout: string
   stderr: string
+  exitCode: number
+  signal?: string
+}
+
+export class ProcessExecutionError extends Error {
+  constructor(
+    readonly executable: string,
+    readonly result: RunResult,
+    readonly spawnError?: string
+  ) {
+    super(`${executable} 실행에 실패했습니다.`)
+    this.name = 'ProcessExecutionError'
+  }
 }
 
 export function runProcess(
@@ -11,15 +24,33 @@ export function runProcess(
   options: { signal?: AbortSignal; onStdout?: (value: string) => void; onStderr?: (value: string) => void } = {}
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    let child
+    try {
+      child = spawn(executable, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch (error) {
+      reject(new ProcessExecutionError(executable, { stdout: '', stderr: '', exitCode: -1 }, error instanceof Error ? error.message : String(error)))
+      return
+    }
     let stdout = ''
     let stderr = ''
+    let settled = false
+
+    const finish = (error?: Error, result?: RunResult): void => {
+      if (settled) return
+      settled = true
+      options.signal?.removeEventListener('abort', abort)
+      if (error) reject(error)
+      else resolve(result!)
+    }
 
     const abort = (): void => {
       child.kill('SIGTERM')
-      reject(new DOMException('작업이 취소되었습니다.', 'AbortError'))
+      finish(new DOMException('작업이 취소되었습니다.', 'AbortError'))
     }
-    if (options.signal?.aborted) return abort()
+    if (options.signal?.aborted) {
+      abort()
+      return
+    }
     options.signal?.addEventListener('abort', abort, { once: true })
 
     child.stdout.on('data', (chunk: Buffer) => {
@@ -32,11 +63,11 @@ export function runProcess(
       stderr += value
       options.onStderr?.(value)
     })
-    child.on('error', reject)
-    child.on('close', (code) => {
-      options.signal?.removeEventListener('abort', abort)
-      if (code === 0) resolve({ stdout, stderr })
-      else reject(new Error(`${executable} 실행에 실패했습니다. (종료 코드 ${code})`))
+    child.on('error', (error) => finish(new ProcessExecutionError(executable, { stdout, stderr, exitCode: -1 }, error.message)))
+    child.on('close', (code, signal) => {
+      const result: RunResult = { stdout, stderr, exitCode: code ?? -1, signal: signal ?? undefined }
+      if (code === 0) finish(undefined, result)
+      else finish(new ProcessExecutionError(executable, result))
     })
   })
 }

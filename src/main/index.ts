@@ -1,9 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, protocol, session, shell } from 'electron'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { writeFile } from 'node:fs/promises'
+import { totalmem } from 'node:os'
 import { LOCAL_ENGINE_VERSION, OPENAI_MODEL } from '@shared/constants'
 import { generateScriptRows, validateRows } from '@shared/rows'
-import type { CreateProjectInput, ExternalLinkTarget, ModelDownloadProgress, ProcessingProgress, ProcessingRun, ScriptProject, ScriptRow, TranscriptionEngine } from '@shared/types'
+import type { CreateProjectInput, ExternalLinkTarget, LocalModelStatus, ModelDownloadProgress, ProcessingProgress, ProcessingRun, ScriptProject, ScriptRow, TranscriptionEngine } from '@shared/types'
 import { buildHwpx, nextVersionedHwpxPath } from './services/hwpx'
 import { prepareMedia } from './services/media'
 import { createMediaProtocolHandler } from './services/media-protocol'
@@ -23,6 +25,8 @@ import {
   setTranscriptionEngine
 } from './services/project-store'
 import { appVersion, templatePath } from './services/runtime'
+import { buildLocalDiagnosticReport } from './services/diagnostics'
+import { classifyProcessFailure, LocalProcessingError, sanitizeDiagnosticText } from './services/processing-errors'
 import { clearApiKey, getApiKey, hasApiKey, saveApiKey } from './services/settings-store'
 import { installYouTubeClientIdentity } from './services/youtube-client-identity'
 import { checkForAppUpdates, configureAppUpdater, getAppUpdateStatus, installAppUpdate } from './services/app-updater'
@@ -76,6 +80,7 @@ async function processProject(id: string): Promise<ScriptProject> {
 
   const progress = (value: Omit<ProcessingProgress, 'projectId'>): void => sendProgress({ projectId: id, ...value })
   let apiKey: string | null = null
+  let modelIntegrity: LocalModelStatus['integrity'] | undefined
 
   try {
     apiKey = engine === 'openai' ? await getApiKey() : null
@@ -90,17 +95,32 @@ async function processProject(id: string): Promise<ScriptProject> {
     await saveProject(project)
     let modelPath: string | undefined
     if (engine === 'local') {
-      modelPath = await ensureLocalModel({
-        signal: controller.signal,
-        onProgress: (modelProgress) => {
-          sendModelProgress(modelProgress)
-          progress({
-            stage: 'downloadingModel',
-            percent: 30 + Math.round(modelProgress.percent * 0.2),
-            message: modelProgress.message
+      try {
+        modelIntegrity = (await localModelStatus()).integrity
+        modelPath = await ensureLocalModel({
+          signal: controller.signal,
+          onProgress: (modelProgress) => {
+            sendModelProgress(modelProgress)
+            progress({
+              stage: 'downloadingModel',
+              percent: 30 + Math.round(modelProgress.percent * 0.2),
+              message: modelProgress.message
+            })
+          }
+        })
+      } catch (error) {
+        const modelStatus = await localModelStatus()
+        modelIntegrity = modelStatus.integrity
+        throw new LocalProcessingError({
+          code: modelStatus.integrity === 'invalid' ? 'MODEL_CORRUPTED' : 'MODEL_MISSING',
+          stage: 'model',
+          message: modelStatus.integrity === 'invalid'
+            ? '로컬 음성인식 모델이 손상되어 복구하지 못했습니다. 설정에서 모델 복구를 다시 시도하세요.'
+            : '로컬 음성인식 모델을 준비하지 못했습니다. 인터넷 연결을 확인하고 다시 시도하세요.',
+          stderr: error instanceof Error ? error.message : undefined
           })
-        }
-      })
+      }
+      modelIntegrity = 'valid'
     }
     progress({
       stage: 'transcribing',
@@ -122,16 +142,32 @@ async function processProject(id: string): Promise<ScriptProject> {
     project.rows = generateScriptRows(project.segments, project.media.durationMs)
     project.status = 'review'
     run.completedAt = new Date().toISOString()
+    run.modelIntegrity = modelIntegrity
     await saveProject(project)
     progress({ stage: 'complete', percent: 100, message: '검수할 준비가 되었습니다.' })
     return project
   } catch (error) {
     const transcriptionFailure = error instanceof TranscriptionFailure ? error : null
     const aborted = controller.signal.aborted || transcriptionFailure?.code === 'OPENAI_ABORTED' || (error instanceof DOMException && error.name === 'AbortError')
+    const localFailure = error instanceof LocalProcessingError
+      ? error
+      : !transcriptionFailure && engine === 'local'
+        ? classifyProcessFailure(error, 'transcription')
+        : null
     project.status = aborted ? 'draft' : 'error'
-    project.lastError = aborted ? '작업이 취소되었습니다.' : error instanceof Error ? error.message : '알 수 없는 오류가 발생했습니다.'
+    project.lastError = aborted
+      ? '작업이 취소되었습니다.'
+      : localFailure?.message ?? transcriptionFailure?.message ?? sanitizeDiagnosticText(error instanceof Error ? error.message : undefined) ?? '알 수 없는 오류가 발생했습니다.'
     run.completedAt = new Date().toISOString()
-    run.errorCode = aborted ? 'ABORTED' : transcriptionFailure?.code ?? 'PROCESSING_FAILED'
+    run.errorCode = aborted ? 'ABORTED' : transcriptionFailure?.code ?? localFailure?.code ?? 'PROCESSING_FAILED'
+    run.errorStage = localFailure?.stage
+    run.exitCode = localFailure?.exitCode
+    run.stderrSummary = localFailure?.stderrSummary
+    run.appVersion = appVersion()
+    run.platform = process.platform
+    run.architecture = process.arch
+    run.totalMemoryBytes = totalmem()
+    run.modelIntegrity = modelIntegrity
     run.httpStatus = transcriptionFailure?.status
     run.requestId = transcriptionFailure?.requestId
     await saveProject(project)
@@ -241,6 +277,19 @@ function registerIpc(): void {
     return localModelStatus()
   })
   ipcMain.handle('model:delete', () => deleteLocalModel())
+  ipcMain.handle('project:export-diagnostics', async (_event, id: string) => {
+    const project = await loadProject(id)
+    const report = await buildLocalDiagnosticReport(project)
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: '분석 진단 파일 저장',
+      defaultPath: join(projectsRoot(), '..', `${project.title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')}-diagnostic.json`),
+      filters: [{ name: 'JSON 진단 파일', extensions: ['json'] }]
+    })
+    if (result.canceled || !result.filePath) return null
+    await writeFile(result.filePath, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+    shell.showItemInFolder(result.filePath)
+    return { path: result.filePath }
+  })
 }
 
 async function createWindow(): Promise<void> {

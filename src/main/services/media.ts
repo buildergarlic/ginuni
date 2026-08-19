@@ -2,9 +2,11 @@ import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { mkdir, readdir, stat } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
+import { access } from 'node:fs/promises'
 import { MAX_DURATION_MS, MAX_UPLOAD_BYTES, TARGET_UPLOAD_BYTES } from '@shared/constants'
 import type { ProcessingProgress, ScriptProject, TranscriptionEngine } from '@shared/types'
 import { runProcess } from './process-runner'
+import { classifyProcessFailure, LocalProcessingError } from './processing-errors'
 import { runtimeExecutable } from './runtime'
 
 interface ProbeResult {
@@ -42,13 +44,21 @@ async function sha256(filePath: string): Promise<string> {
 
 async function probe(filePath: string, signal?: AbortSignal): Promise<ProbeResult> {
   const ffprobe = await runtimeExecutable('ffprobe')
-  const { stdout } = await runProcess(ffprobe, ['-v', 'error', '-show_format', '-show_streams', '-of', 'json', filePath], { signal })
-  return JSON.parse(stdout) as ProbeResult
+  try {
+    const { stdout } = await runProcess(ffprobe, ['-v', 'error', '-show_format', '-show_streams', '-of', 'json', filePath], { signal })
+    return JSON.parse(stdout) as ProbeResult
+  } catch (error) {
+    if (signal?.aborted) throw new DOMException('작업이 취소되었습니다.', 'AbortError')
+    if (error instanceof SyntaxError) {
+      throw new LocalProcessingError({ code: 'FFPROBE_FAILED', stage: 'probe', message: '영상 정보 결과를 읽을 수 없습니다.' })
+    }
+    throw classifyProcessFailure(error, 'probe', 'FFPROBE_FAILED')
+  }
 }
 
 function durationFromProbe(value: ProbeResult): number {
   const durationMs = Math.round(Number(value.format?.duration ?? 0) * 1000)
-  if (!Number.isFinite(durationMs) || durationMs <= 0) throw new Error('영상 길이를 확인할 수 없습니다.')
+  if (!Number.isFinite(durationMs) || durationMs <= 0) throw new LocalProcessingError({ code: 'FFPROBE_FAILED', stage: 'probe', message: '영상 길이를 확인할 수 없습니다.' })
   if (durationMs > MAX_DURATION_MS) throw new Error('첫 버전은 3시간 이하 영상만 지원합니다.')
   return durationMs
 }
@@ -107,13 +117,22 @@ export async function prepareMedia(options: {
     sourcePath = await downloadYouTubeAudio(project.source.uri, mediaDirectory, signal)
   } else {
     sourcePath = project.source.localMediaPath ?? project.source.uri
+    try {
+      await access(sourcePath)
+    } catch {
+      throw new LocalProcessingError({ code: 'MEDIA_NOT_FOUND', stage: 'media', message: '선택한 원본 파일을 찾을 수 없습니다. 파일이 이동·삭제되지 않았는지 확인하세요.' })
+    }
     progress({ stage: 'probing', percent: 8, message: '영상 정보를 확인하고 있습니다.' })
     const details = await probe(sourcePath, signal)
     project.media.durationMs = durationFromProbe(details)
     const video = details.streams?.find((stream) => stream.codec_type === 'video')
     project.media.width = video?.width
     project.media.height = video?.height
-    project.source.sha256 = await sha256(sourcePath)
+    try {
+      project.source.sha256 = await sha256(sourcePath)
+    } catch {
+      throw new LocalProcessingError({ code: 'MEDIA_UNREADABLE', stage: 'media', message: '원본 파일을 읽을 수 없습니다. 파일 권한과 저장 위치를 확인하세요.' })
+    }
   }
 
   const local = engine === 'local'
@@ -126,9 +145,19 @@ export async function prepareMedia(options: {
         const bitrate = opusBitrate(project.media.durationMs)
         return ['-y', '-i', sourcePath, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libopus', '-b:a', String(bitrate), '-vbr', 'off', '-application', 'voip', audioPath]
       })()
-  await runProcess(ffmpeg, encodingArgs, { signal })
+  try {
+    await runProcess(ffmpeg, encodingArgs, { signal })
+  } catch (error) {
+    if (signal?.aborted) throw new DOMException('작업이 취소되었습니다.', 'AbortError')
+    throw classifyProcessFailure(error, 'encoding', 'FFMPEG_FAILED')
+  }
 
-  const audioBytes = (await stat(audioPath)).size
+  let audioBytes: number
+  try {
+    audioBytes = (await stat(audioPath)).size
+  } catch {
+    throw new LocalProcessingError({ code: 'FFMPEG_FAILED', stage: 'encoding', message: '분석용 음성 파일이 생성되지 않았습니다.' })
+  }
   if (!local && audioBytes > MAX_UPLOAD_BYTES) throw new Error('전사용 음성이 24.5MB를 초과했습니다.')
   project.media.audioPath = audioPath
   project.media.audioBytes = audioBytes

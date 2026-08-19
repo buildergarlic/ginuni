@@ -4,6 +4,20 @@ export type ProjectStatus = 'draft' | 'processing' | 'review' | 'exported' | 'er
 export type TranscriptionEngine = 'local' | 'openai'
 export type ExternalLinkTarget = 'repository' | 'sponsor' | 'threads' | 'email' | 'kakao'
 export type UpdateState = 'disabled' | 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
+export type LocalProcessingStage = 'media' | 'probe' | 'encoding' | 'model' | 'runtime' | 'transcription' | 'output' | 'building'
+export type LocalFailureCode =
+  | 'MEDIA_NOT_FOUND'
+  | 'MEDIA_UNREADABLE'
+  | 'FFPROBE_FAILED'
+  | 'FFMPEG_FAILED'
+  | 'MODEL_MISSING'
+  | 'MODEL_CORRUPTED'
+  | 'RUNTIME_BLOCKED'
+  | 'UNSUPPORTED_ARCHITECTURE'
+  | 'INSUFFICIENT_MEMORY'
+  | 'WHISPER_FAILED'
+  | 'WHISPER_OUTPUT_INVALID'
+  | 'PROCESSING_FAILED'
 
 export interface UpdateStatus {
   state: UpdateState
@@ -57,6 +71,14 @@ export interface ProcessingRun {
   provider: TranscriptionEngine
   model: string
   errorCode?: string
+  errorStage?: LocalProcessingStage
+  exitCode?: number
+  stderrSummary?: string
+  appVersion?: string
+  platform?: string
+  architecture?: string
+  totalMemoryBytes?: number
+  modelIntegrity?: LocalModelStatus['integrity']
   httpStatus?: number
   requestId?: string
 }
@@ -122,9 +144,39 @@ export interface CreateProjectInput {
 
 export interface LocalModelStatus {
   installed: boolean
+  integrity: 'missing' | 'valid' | 'invalid'
   sizeBytes: number
   expectedBytes: number
   modelName: string
+}
+
+export interface RuntimeDiagnostic {
+  name: 'ffmpeg' | 'ffprobe' | 'whisper-cli' | 'vad-model'
+  available: boolean
+  runnable: boolean
+  detail?: string
+}
+
+export interface LocalDiagnosticReport {
+  generatedAt: string
+  appVersion: string
+  platform: string
+  osVersion: string
+  processArchitecture: string
+  osArchitecture: string
+  totalMemoryBytes: number
+  freeMemoryBytes: number
+  project: {
+    id: string
+    sourceKind: SourceKind
+    sourceExtension?: string
+    sourceSizeBytes?: number
+    durationMs: number
+  }
+  latestRun?: Pick<ProcessingRun, 'id' | 'provider' | 'model' | 'startedAt' | 'completedAt' | 'errorCode' | 'errorStage' | 'exitCode' | 'stderrSummary' | 'modelIntegrity'>
+  lastError?: string
+  localModel: LocalModelStatus
+  runtimes: RuntimeDiagnostic[]
 }
 
 export interface ModelDownloadProgress {
@@ -159,6 +211,7 @@ export interface AppApi {
   clearApiKey(): Promise<void>
   downloadLocalModel(): Promise<LocalModelStatus>
   deleteLocalModel(): Promise<LocalModelStatus>
+  exportDiagnostics(id: string): Promise<{ path: string } | null>
   openExternal(target: ExternalLinkTarget): Promise<void>
   checkForUpdates(): Promise<UpdateStatus>
   installUpdate(): Promise<void>

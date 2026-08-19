@@ -15,3 +15,4 @@ export const MAX_DIALOGUE_ROW_MS = 60_000
 export const DESCRIPTION_TEXT = '※ (사람 목소리 없음) 해설 삽입 권장 구간'
 export const PROJECTS_DIRECTORY_NAME = '화면해설 대본 도구'
 export const YOUTUBE_CLIENT_IDENTITY = 'https://github.com/buildergarlic/ginuni'
+export const LOCAL_MODEL_REPAIR_MIN_FREE_MEMORY_BYTES = 256 * 1024 * 1024

@@ -40,8 +40,33 @@ export async function localModelStatus(): Promise<LocalModelStatus> {
   } catch {
     // 아직 모델이 설치되지 않았다.
   }
+  if (sizeBytes === 0) {
+    return {
+      installed: false,
+      integrity: 'missing',
+      sizeBytes,
+      expectedBytes: LOCAL_MODEL_BYTES,
+      modelName: LOCAL_MODEL_NAME
+    }
+  }
+  let valid = false
+  try {
+    valid = sizeBytes === LOCAL_MODEL_BYTES && await fileSha256(localModelPath()) === LOCAL_MODEL_SHA256
+  } catch {
+    valid = false
+  }
+  if (!valid) {
+    return {
+      installed: false,
+      integrity: 'invalid',
+      sizeBytes,
+      expectedBytes: LOCAL_MODEL_BYTES,
+      modelName: LOCAL_MODEL_NAME
+    }
+  }
   return {
-    installed: sizeBytes === LOCAL_MODEL_BYTES,
+    installed: true,
+    integrity: 'valid',
     sizeBytes,
     expectedBytes: LOCAL_MODEL_BYTES,
     modelName: LOCAL_MODEL_NAME

@@ -17,6 +17,7 @@ const api: AppApi = {
   clearApiKey: () => ipcRenderer.invoke('settings:clear-api-key'),
   downloadLocalModel: () => ipcRenderer.invoke('model:download'),
   deleteLocalModel: () => ipcRenderer.invoke('model:delete'),
+  exportDiagnostics: (id: string) => ipcRenderer.invoke('project:export-diagnostics', id),
   openExternal: (target: ExternalLinkTarget) => ipcRenderer.invoke('app:open-external', target),
   checkForUpdates: () => ipcRenderer.invoke('app:check-for-updates'),
   installUpdate: () => ipcRenderer.invoke('app:install-update'),

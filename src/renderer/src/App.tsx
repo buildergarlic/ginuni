@@ -30,6 +30,26 @@ function statusLabel(status: ProjectSummary['status']): string {
   return ({ draft: '준비', processing: '처리 중', review: '검수', exported: '내보냄', error: '오류' } as const)[status]
 }
 
+function processingStageLabel(stage?: string): string {
+  return ({ media: '원본 파일 확인', probe: '영상 정보 확인', encoding: '음성 변환', model: '로컬 모델 준비', runtime: '분석 엔진 실행', transcription: 'Whisper 음성 분석', output: '분석 결과 읽기', building: '대본 구성' } as Record<string, string>)[stage ?? ''] ?? stage ?? ''
+}
+
+function processingResolution(code?: string): string {
+  return ({
+    MEDIA_NOT_FOUND: '원본 파일이 이동·삭제되지 않았는지 확인하세요.',
+    MEDIA_UNREADABLE: '파일 권한을 확인하고 바탕화면 등 짧은 경로로 옮겨 다시 시도하세요.',
+    FFPROBE_FAILED: '지원되는 영상인지 확인하고 다른 영상으로 다시 시도하세요.',
+    FFMPEG_FAILED: '영상 코덱 또는 저장 위치를 확인한 뒤 다시 시도하세요.',
+    MODEL_MISSING: '로컬 모델 복구를 실행하거나 설정에서 모델을 다시 받으세요.',
+    MODEL_CORRUPTED: '로컬 모델 복구를 실행해 모델 파일을 다시 설치하세요.',
+    RUNTIME_BLOCKED: 'Windows 보안 프로그램이 분석 엔진을 차단했는지 확인하세요.',
+    UNSUPPORTED_ARCHITECTURE: '현재 PC의 Windows/CPU 아키텍처에서는 로컬 엔진을 사용할 수 없습니다. OpenAI 모드를 사용해 보세요.',
+    INSUFFICIENT_MEMORY: '다른 프로그램을 종료하고 다시 시도하세요.',
+    WHISPER_FAILED: '다시 분석하거나 로컬 모델 복구를 실행하세요.',
+    WHISPER_OUTPUT_INVALID: '다시 분석하고 계속 실패하면 진단 파일을 저장해 문의하세요.'
+  } as Record<string, string>)[code ?? ''] ?? '다시 분석하고 계속 실패하면 진단 파일을 저장해 문의하세요.'
+}
+
 function videoIdFromUrl(value: string): string | null {
   try {
     const url = new URL(value)
@@ -221,7 +241,7 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
       </div>
       {engine === 'local' && !bootstrap.localModel.installed && (
         <button className="model-notice" onClick={onOpenSettings}>
-          <strong>첫 사용 시 로컬 모델 다운로드</strong><span>약 181MB · 설정에서 미리 받을 수 있습니다 →</span>
+          <strong>{bootstrap.localModel.integrity === 'invalid' ? '로컬 모델 복구 필요' : '첫 사용 시 로컬 모델 다운로드'}</strong><span>약 181MB · 설정에서 준비할 수 있습니다 →</span>
         </button>
       )}
       {engine === 'openai' && !bootstrap.hasApiKey && (
@@ -310,14 +330,18 @@ function SettingsScreen({ bootstrap, onChanged, onBack }: {
         <h2>API 없이 내 PC에서 분석</h2>
         <div className="settings-status">
           <span className={`status-dot ${bootstrap.localModel.installed ? 'ok' : ''}`} />
-          {bootstrap.localModel.installed ? `${bootstrap.localModel.modelName} 모델이 설치되어 있습니다.` : '로컬 모델을 받으면 API 키 없이 사용할 수 있습니다.'}
+          {bootstrap.localModel.installed
+            ? `${bootstrap.localModel.modelName} 모델이 설치되어 있습니다.`
+            : bootstrap.localModel.integrity === 'invalid'
+              ? '로컬 모델 파일이 손상되어 복구가 필요합니다.'
+              : '로컬 모델을 받으면 API 키 없이 사용할 수 있습니다.'}
         </div>
         <p className="helper-text">영상 음성은 이 PC 안에서만 처리됩니다. 로컬 첫 버전은 자동 화자 분리를 하지 않으며 대사에는 화자명을 임의로 표시하지 않습니다.</p>
         {modelProgress && modelBusy && (
           <div className="model-progress"><div className="progress-track"><i style={{ width: `${modelProgress.percent}%` }} /></div><span>{modelProgress.percent}% · {Math.round(modelProgress.downloadedBytes / 1024 / 1024)}MB / {Math.round(modelProgress.totalBytes / 1024 / 1024)}MB</span></div>
         )}
         <div className="button-row">
-          {!bootstrap.localModel.installed && <button className="primary-button" disabled={modelBusy} onClick={downloadModel}>{modelBusy ? '모델 받는 중…' : '로컬 모델 다운로드 (약 181MB)'}</button>}
+          {!bootstrap.localModel.installed && <button className="primary-button" disabled={modelBusy} onClick={downloadModel}>{modelBusy ? '모델 받는 중…' : bootstrap.localModel.integrity === 'invalid' ? '로컬 모델 복구 (약 181MB)' : '로컬 모델 다운로드 (약 181MB)'}</button>}
           {bootstrap.localModel.installed && <button className="danger-button" onClick={removeModel}>로컬 모델 삭제</button>}
         </div>
         <hr />
@@ -457,13 +481,15 @@ function SupportScreen({ bootstrap, onBack, onAbout }: {
   )
 }
 
-function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSupport, notify, closeSaveRef }: {
+function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSupport, onRetry, onRepairModel, notify, closeSaveRef }: {
   project: ScriptProject
   onProject: (value: ScriptProject) => void
   onBack: () => void
   onSettings: () => void
   onAbout: () => void
   onSupport: () => void
+  onRetry: () => void
+  onRepairModel: () => void
   notify: (value: string) => void
   closeSaveRef: { current: (() => Promise<void>) | null }
 }) {
@@ -622,6 +648,12 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
       if (result) notify(`SRT를 저장했습니다: ${result.path}`)
     } catch (cause) { notify(errorMessage(cause)) }
   }
+  const exportDiagnostics = async (): Promise<void> => {
+    try {
+      const result = await window.screenScript.exportDiagnostics(project.id)
+      if (result) notify(`진단 파일을 저장했습니다: ${result.path}`)
+    } catch (cause) { notify(errorMessage(cause)) }
+  }
   const leaveReview = (navigate: () => void): void => {
     void (async () => {
       try {
@@ -694,8 +726,8 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
         <main className="script-panel">
           {project.lastError && (
             <div className="project-error-banner">
-              <div><strong>마지막 분석 오류</strong><span>{project.lastError}</span></div>
-              <small>{latestRun?.errorCode ? `오류 코드: ${latestRun.errorCode}` : ''}{latestRun?.requestId ? ` · 요청 ID: ${latestRun.requestId}` : ''}</small>
+              <div><strong>마지막 분석 오류</strong><span>{project.lastError}</span>{latestRun?.errorStage && <small>실패 단계: {processingStageLabel(latestRun.errorStage)}</small>}<p className="error-resolution">{processingResolution(latestRun?.errorCode)}</p><div className="error-actions"><button className="secondary-button compact-action" onClick={onRetry}>다시 분석</button>{(project.transcriptionEngine ?? 'local') === 'local' && <button className="secondary-button compact-action" onClick={onRepairModel}>로컬 모델 복구</button>}<button className="secondary-button compact-action" onClick={exportDiagnostics}>진단 파일 저장</button></div></div>
+              <small>{latestRun?.errorCode ? `오류 코드: ${latestRun.errorCode}` : ''}{latestRun?.exitCode !== undefined ? ` · 종료 코드: ${latestRun.exitCode}` : ''}{latestRun?.requestId ? ` · 요청 ID: ${latestRun.requestId}` : ''}</small>
             </div>
           )}
           <div className="script-toolbar">
@@ -784,6 +816,14 @@ export default function App() {
     } catch (cause) { setNotice(errorMessage(cause)); setProject(await window.screenScript.loadProject(project.id)) }
     finally { window.setTimeout(() => setProgress(null), 800) }
   }
+  const repairLocalModel = async (): Promise<void> => {
+    try {
+      setNotice('로컬 모델을 확인하고 복구하는 중입니다…')
+      const localModel = await window.screenScript.downloadLocalModel()
+      setBootstrap((value) => value ? { ...value, localModel } : value)
+      setNotice(localModel.installed ? '로컬 모델 복구가 완료되었습니다.' : '로컬 모델을 복구하지 못했습니다. 설정에서 다시 시도하세요.')
+    } catch (cause) { setNotice(errorMessage(cause)) }
+  }
   const changeEngine = async (engine: TranscriptionEngine): Promise<void> => {
     if (!project) return
     try { setProject(await window.screenScript.setTranscriptionEngine(project.id, engine)) }
@@ -825,10 +865,12 @@ export default function App() {
           onProject={setProject}
           notify={setNotice}
           onBack={() => { setScreen('home'); refresh().catch(() => undefined) }}
-          onSettings={() => openAuxiliary('settings')}
-          onAbout={() => openAuxiliary('about')}
-          onSupport={() => openAuxiliary('support')}
-          closeSaveRef={closeSaveRef}
+           onSettings={() => openAuxiliary('settings')}
+           onAbout={() => openAuxiliary('about')}
+           onSupport={() => openAuxiliary('support')}
+           onRetry={() => void startProcessing()}
+           onRepairModel={() => void repairLocalModel()}
+           closeSaveRef={closeSaveRef}
         />
         {project.status !== 'review' && project.status !== 'exported' && (
           <>
