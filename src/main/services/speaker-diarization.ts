@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { cpus, freemem } from 'node:os'
+import { mkdtemp, copyFile, rm as removeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import {
   DIARIZATION_EMBEDDING_MODEL,
   DIARIZATION_ENGINE_VERSION,
@@ -12,7 +15,7 @@ import type {
   TranscriptSegment
 } from '@shared/types'
 import type { WhisperWord } from './local-transcription'
-import { runProcess } from './process-runner'
+import { ProcessExecutionError, runProcess } from './process-runner'
 import { diarizationModelPath, runtimeExecutable } from './runtime'
 
 export class DiarizationExecutionError extends Error {
@@ -25,6 +28,58 @@ export class DiarizationExecutionError extends Error {
     super(message)
     this.name = 'DiarizationExecutionError'
   }
+}
+
+function classifyDiarizationFailure(error: ProcessExecutionError, detail?: string): DiarizationExecutionError {
+  const exitCode = error.result.exitCode
+  const source = (detail ?? '').toLowerCase()
+
+  if (exitCode === 0xC000007B || exitCode === 0xC0000135 || exitCode === 0xC0000142 || exitCode === 0xC000001D) {
+    return new DiarizationExecutionError(
+      'DIARIZATION_RUNTIME_BLOCKED',
+      '화자 분리 엔진이 현재 PC에서 실행되지 않습니다. Windows 보안 설정 또는 실행권한을 확인하세요.',
+      detail,
+      exitCode
+    )
+  }
+
+  if (source.includes('enoent') || source.includes('eacces') || source.includes('access is denied') || source.includes('permission denied')) {
+    return new DiarizationExecutionError(
+      'DIARIZATION_RUNTIME_BLOCKED',
+      '로컬 화자 분리 실행 파일 접근이 차단되었습니다. 보안 프로그램 예외 등록 후 다시 시도하세요.',
+      detail,
+      exitCode
+    )
+  }
+
+  if (source.includes('out of memory') || source.includes('not enough memory') || source.includes('memory allocation')) {
+    return new DiarizationExecutionError(
+      'DIARIZATION_INSUFFICIENT_MEMORY',
+      '화자 분리에 필요한 메모리가 부족합니다. 다른 프로그램을 종료하고 다시 시도하세요.',
+      detail,
+      exitCode
+    )
+  }
+
+  if (
+    source.includes('onnxruntime') ||
+    source.includes('3dspeaker') ||
+    source.includes('pyannote') ||
+    source.includes('no such file') ||
+    source.includes('not found') ||
+    source.includes('cannot load') ||
+    source.includes('loadlibrary') ||
+    source.includes('dll')
+  ) {
+    return new DiarizationExecutionError(
+      'DIARIZATION_MODEL_INVALID',
+      '화자 분리 구성 요소(모델/런타임)가 손상되었거나 누락되었습니다. 앱을 재설치하고 다시 시도하세요.',
+      detail,
+      exitCode
+    )
+  }
+
+  return new DiarizationExecutionError('DIARIZATION_FAILED', '화자 분리 엔진 실행에 실패했습니다.', detail, exitCode)
 }
 
 export function validateDiarizationConfig(config: LocalDiarizationConfig): LocalDiarizationConfig {
@@ -92,14 +147,17 @@ export class SherpaOnnxDiarizationProvider {
       '--min-duration-on=0.3',
       '--min-duration-off=0.5',
       '--print-args=false',
-      options.speakerCount === null ? '--clustering.cluster-threshold=0.5' : `--clustering.num-clusters=${options.speakerCount}`,
-      options.audioPath
+      options.speakerCount === null ? '--clustering.cluster-threshold=0.5' : `--clustering.num-clusters=${options.speakerCount}`
     ]
 
     let progressBuffer = ''
     let lastProgress = -1
+    let stagingDir: string | undefined
     try {
-      const result = await runProcess(executable, args, {
+      stagingDir = await mkdtemp(join(tmpdir(), 'ginuni-diarization-'))
+      const stagedAudioPath = join(stagingDir, 'transcription-local.wav')
+      await copyFile(options.audioPath, stagedAudioPath)
+      const result = await runProcess(executable, [...args, stagedAudioPath], {
         signal: options.signal,
         onStderr: (value) => {
           progressBuffer = `${progressBuffer}${value}`.slice(-2_000)
@@ -112,7 +170,18 @@ export class SherpaOnnxDiarizationProvider {
       })
       return parseDiarizationSegments(`${result.stdout}\n${result.stderr}`)
     } catch (error) {
+      const copyMessage = error instanceof Error ? error.message : undefined
+      if (copyMessage && /(enoent|no such file|does not exist|not found)/i.test(copyMessage)) {
+        throw new DiarizationExecutionError(
+          'DIARIZATION_OUTPUT_INVALID',
+          '화자 분리에 필요한 입력 음성 파일을 찾을 수 없습니다.',
+          copyMessage
+        )
+      }
       if (options.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error
+      if (error instanceof ProcessExecutionError) {
+        throw classifyDiarizationFailure(error, error.spawnError ?? error.result.stderr)
+      }
       const result = error && typeof error === 'object' && 'result' in error
         ? (error as { result?: { stderr?: string; exitCode?: number } }).result
         : undefined
@@ -122,6 +191,8 @@ export class SherpaOnnxDiarizationProvider {
         result?.stderr ?? (error instanceof Error ? error.message : undefined),
         result?.exitCode
       )
+    } finally {
+      if (stagingDir) await removeFile(stagingDir, { recursive: true, force: true })
     }
   }
 }

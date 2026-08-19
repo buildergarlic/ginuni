@@ -72,6 +72,17 @@ function processingResolution(code?: string): string {
   } as Record<string, string>)[code ?? ''] ?? '다시 분석하고 계속 실패하면 진단 파일을 저장해 문의하세요.'
 }
 
+function diarizationResolution(code?: string): string {
+  return ({
+    DIARIZATION_RUNTIME_BLOCKED: '보안 프로그램이 실행을 막았을 수 있습니다. 허용 후 재시도하거나 Windows 보안 예외를 추가해 주세요.',
+    DIARIZATION_MODEL_INVALID: '화자 분리 구성 요소가 깨졌을 수 있습니다. 앱을 재설치하면 즉시 해결되는 경우가 많습니다.',
+    DIARIZATION_INSUFFICIENT_MEMORY: '메모리가 부족할 수 있습니다. 다른 앱을 종료한 뒤 다시 시도하세요.',
+    DIARIZATION_OUTPUT_INVALID: '화자 구간 품질이 낮아 화자 표기가 생략됩니다. 음성 구간과 발화량을 확인해 주세요.',
+    DIARIZATION_WORD_TIMESTAMPS_UNAVAILABLE: '단어 타임스탬프가 없어 문장 단위로만 화자 구분을 시도했습니다.',
+    DIARIZATION_FAILED: '화자 분리 엔진 실행 자체에 실패했습니다. 구성 요소 상태를 확인하고 앱을 재설치해 보세요.'
+  } as Record<string, string>)[code ?? ''] ?? '화자 분리 실패 로그를 진단 파일로 저장해 분석하세요.'
+}
+
 function videoIdFromUrl(value: string): string | null {
   try {
     const url = new URL(value)
@@ -806,7 +817,13 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
             <div className="project-warning-banner">
               <div>
                 <strong>{latestRun?.diarization?.status === 'fallback' ? '화자 분리 안내' : '분석 안내'}</strong>
-                {latestRun?.warnings?.map((warning) => <span key={`${warning.code}:${warning.message}`}>{warning.message}</span>)}
+                {latestRun?.warnings?.map((warning) => (
+                  <span key={`${warning.code}:${warning.message}`}>
+                    <div>{warning.message}</div>
+                    {warning.detail && <small>원인: {warning.detail}</small>}
+                    <div className="error-resolution">{diarizationResolution(warning.code)}</div>
+                  </span>
+                ))}
                 {latestRun?.diarization?.status === 'fallback' && <p>대사 인식은 완료했으며 화자 표기 없이 검수·HWPX·SRT 작업을 계속할 수 있습니다.</p>}
                 <div className="error-actions">
                   <button className="secondary-button compact-action" onClick={onRetry}>다시 분석</button>

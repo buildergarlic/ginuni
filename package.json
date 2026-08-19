@@ -1,6 +1,6 @@
 {
   "name": "screen-description-script-maker",
-  "version": "0.5.0-beta.1",
+  "version": "0.5.0-beta.2",
   "description": "영상 음성과 화자를 분석해 화면해설 작업용 HWPX 대본을 만드는 Windows 데스크톱 앱",
   "main": "out/main/index.js",
   "author": "BuilderGarlic",

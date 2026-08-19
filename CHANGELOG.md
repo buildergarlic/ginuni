@@ -2,6 +2,15 @@
 
 이 프로젝트는 [Semantic Versioning](https://semver.org/)을 따릅니다.
 
+## [0.5.0-beta.2] - 2026-08-20
+
+### 수정
+
+- 로컬 화자 분리 실행 경로 안정성 개선: `transcription-local.wav`를 임시 ASCII 경로로 복사해 실행하여 경로 존재성/문자 인코딩/특수문자 이슈로 인한 `does not exist` 계열 실패를 완화
+- 화자 분리 실패 시 원인 분류 세분화(`DIARIZATION_RUNTIME_BLOCKED`, `DIARIZATION_MODEL_INVALID`, `DIARIZATION_INSUFFICIENT_MEMORY`, `DIARIZATION_OUTPUT_INVALID`) 및 안내 메시지 보완
+- 진단 텍스트 정제 강화로 경로·시스템 출력의 일부 깨짐 문자 완화
+- `화자 분리 안내` 패널에서 경고 사유와 해결 가이드를 더 분명하게 표시
+
 ## [0.5.0-beta.1] - 2026-08-20
 
 ### 추가

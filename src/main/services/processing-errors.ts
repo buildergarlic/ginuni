@@ -29,13 +29,19 @@ export class LocalProcessingError extends Error {
 const WINDOWS_PATH = /(?:[A-Za-z]:\\|\\\\)[^\r\n\t ]+/g
 const USER_PROFILE = /(?:C:\\Users\\|Users\\)[^\\\r\n]+/gi
 const API_KEY = /\b(?:sk|sess)-[A-Za-z0-9_-]{12,}\b/g
+const QUOTED_PATH = /(['"])(?:(?:[A-Za-z]:|\\\\)[^'"]+?|\.\.?\\[^'"]+?|\w:\\[^'"]+?)\1/g
+const LOCALE_GARBLES = /[^\x09\x0A\x0D\x20-\x7E\uAC00-\uD7A3]/g
 
 export function sanitizeDiagnosticText(value: unknown, maxLength = 900): string | undefined {
   if (value === undefined || value === null) return undefined
   const text = String(value)
+    .replace(QUOTED_PATH, '$1[redacted-path]$1')
+    .replace(/(filename|file|does not exist|not found|cannot find|failed to read)\s+['"]?([^'"\s]+)?/gi, '$1 [redacted-path]')
     .replace(API_KEY, '[redacted-key]')
     .replace(WINDOWS_PATH, '[redacted-path]')
+    .replace(/[^\\s]+\\[^\\s]+/g, '[redacted-path]')
     .replace(USER_PROFILE, 'Users\\[redacted]\\')
+    .replace(LOCALE_GARBLES, '?')
     .replace(/\s+/g, ' ')
     .trim()
   return text ? text.slice(-maxLength) : undefined
