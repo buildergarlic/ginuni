@@ -865,6 +865,15 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
             <div className="edit-card">
               <div className="edit-card-heading"><h3>선택한 행 편집</h3><span>{selected.kind === 'dialogue' ? '대사' : '해설'}</span></div>
               <p className="help-text" style={{ margin: 0, marginBottom: 10, color: '#596563', fontSize: 12 }}>행 편집은 표에서 직접 수정하세요.</p>
+              <label className="field-label">분류</label>
+              <div className="segmented-control">
+                <button className={selected.kind === 'dialogue' ? 'active' : ''} onClick={() => updateRow(selected.id, {
+                  kind: 'dialogue',
+                  content: selected.kind === 'descriptionGap' ? (supportsSpeakerLabels ? '[화자1] [화자1] 대사' : '대사') : selected.content,
+                  speakers: supportsSpeakerLabels ? (selected.speakers.length ? selected.speakers : ['화자1']) : []
+                })}>대사</button>
+                <button className={selected.kind === 'descriptionGap' ? 'active' : ''} onClick={() => updateRow(selected.id, { kind: 'descriptionGap', content: DESCRIPTION_TEXT, speakers: [] })}>해설</button>
+              </div>
               <div className="button-row compact">
                 <button onClick={() => updateRow(selected.id, { startMs: Math.floor(playhead) * 1000 })}>현재 위치를 시작으로</button>
                 <button onClick={() => updateRow(selected.id, { endMs: Math.ceil(playhead) * 1000 })}>현재 위치를 종료로</button>
