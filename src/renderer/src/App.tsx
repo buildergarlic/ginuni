@@ -562,6 +562,13 @@ function SupportScreen({ bootstrap, onBack, onAbout }: {
   )
 }
 
+type InlineRowDraft = {
+  rowId: string
+  start: string
+  end: string
+  content: string
+}
+
 function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSupport, onRetry, onRepairModel, notify, closeSaveRef }: {
   project: ScriptProject
   onProject: (value: ScriptProject) => void
@@ -583,6 +590,8 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   const [speakerTo, setSpeakerTo] = useState('')
   const [saving, setSaving] = useState(false)
   const [mediaError, setMediaError] = useState('')
+  const [inlineDraft, setInlineDraft] = useState<InlineRowDraft | null>(null)
+  const [inlineErrors, setInlineErrors] = useState<{ start?: string; end?: string; content?: string }>({})
   const mediaRef = useRef<MediaHandle>(null)
   const rowsRef = useRef(project.rows)
   const editVersionRef = useRef(0)
@@ -593,6 +602,10 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   const selected = rows[selectedIndex]
   const latestRun = project.runs.at(-1)
   const supportsSpeakerLabels = projectSupportsSpeakerLabels(project)
+  const loadDraftFromRow = useCallback((row: ScriptRow | undefined): InlineRowDraft | null => {
+    if (!row) return null
+    return { rowId: row.id, start: formatTimecode(row.startMs), end: formatTimecode(row.endMs), content: row.content }
+  }, [])
 
   useEffect(() => {
     rowsRef.current = project.rows
@@ -601,10 +614,24 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     savePromiseRef.current = null
     setRows(project.rows)
     setSelectedId(project.rows[0]?.id ?? '')
+    setInlineDraft(loadDraftFromRow(project.rows[0]))
+    setInlineErrors({})
     setHistory([])
     setDirty(false)
     setMediaError('')
   }, [project.id])
+
+  useEffect(() => {
+    if (!selected) {
+      setInlineDraft(null)
+      setInlineErrors({})
+      return
+    }
+    if (!inlineDraft || inlineDraft.rowId !== selected.id) {
+      setInlineDraft(loadDraftFromRow(selected))
+      setInlineErrors({})
+    }
+  }, [selected, inlineDraft, loadDraftFromRow])
 
   const flushSave = useCallback(async (): Promise<void> => {
     if (savePromiseRef.current) {
@@ -660,6 +687,51 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     setDirty(true)
   }
   const updateRow = (id: string, patch: Partial<ScriptRow>): void => applyRows(rows.map((row) => row.id === id ? { ...row, ...patch, reviewed: true } : row))
+  const updateInlineDraft = (patch: Partial<Omit<InlineRowDraft, 'rowId'>>): void => {
+    setInlineDraft((value) => (value ? { ...value, ...patch } : value))
+    setInlineErrors((value) => {
+      const next = { ...value }
+      if (typeof patch.start === 'string') delete next.start
+      if (typeof patch.end === 'string') delete next.end
+      return next
+    })
+  }
+  const selectRow = (row: ScriptRow): void => {
+    setSelectedId(row.id)
+    setInlineDraft(loadDraftFromRow(row))
+    setInlineErrors({})
+    mediaRef.current?.seek(row.startMs / 1000)
+  }
+  const applyInlineDraft = useCallback((): boolean => {
+    if (!inlineDraft) return true
+    const target = rows.find((row) => row.id === inlineDraft.rowId)
+    if (!target) return true
+
+    const nextErrors: { start?: string; end?: string } = {}
+    const startMs = parseTimecode(inlineDraft.start)
+    const endMs = parseTimecode(inlineDraft.end)
+
+    if (startMs === null) nextErrors.start = '시작 시간은 MM:SS 형식이어야 합니다.'
+    if (endMs === null) nextErrors.end = '종료 시간은 MM:SS 형식이어야 합니다.'
+    if (startMs !== null && endMs !== null && endMs <= startMs) nextErrors.end = '종료 시간은 시작 시간보다 커야 합니다.'
+
+    if (nextErrors.start || nextErrors.end) {
+      setInlineErrors(nextErrors)
+      return false
+    }
+
+    if (startMs === null || endMs === null) return false
+    setInlineErrors({})
+    updateRow(target.id, { startMs, endMs, content: inlineDraft.content })
+    return true
+  }, [inlineDraft, rows, updateRow])
+  const chooseRow = (row: ScriptRow): boolean => {
+    if (!applyInlineDraft()) {
+      return false
+    }
+    selectRow(row)
+    return true
+  }
   const undo = (): void => {
     const previous = history.at(-1)
     if (!previous) return
@@ -670,6 +742,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     setDirty(true)
   }
   const split = (): void => {
+    if (!applyInlineDraft()) return
     if (!selected) return
     const midpoint = Math.round(((selected.startMs + selected.endMs) / 2) / 1000) * 1000
     const requested = Math.round(playhead * 1000 / 1000) * 1000
@@ -683,6 +756,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     applyRows(next)
   }
   const mergeNext = (): void => {
+    if (!applyInlineDraft()) return
     if (!selected || selectedIndex < 0 || selectedIndex >= rows.length - 1) return
     const following = rows[selectedIndex + 1]
     const merged: ScriptRow = {
@@ -701,6 +775,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     setSelectedId(merged.id)
   }
   const renameSpeaker = (): void => {
+    if (!applyInlineDraft()) return
     const from = speakerFrom.trim()
     const to = speakerTo.trim()
     if (!from || !to) return
@@ -716,6 +791,10 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   }
   const exportDocument = async (): Promise<void> => {
     try {
+      if (!applyInlineDraft()) {
+        notify('시작/종료 시간 형식을 확인하세요.')
+        return
+      }
       await flushSave()
       const result = await window.screenScript.exportHwpx(project.id)
       if (result) notify(`HWPX를 저장했습니다: ${result.path}`)
@@ -723,6 +802,10 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   }
   const exportSubtitle = async (): Promise<void> => {
     try {
+      if (!applyInlineDraft()) {
+        notify('시작/종료 시간 형식을 확인하세요.')
+        return
+      }
       await flushSave()
       const result = await window.screenScript.exportSrt(project.id)
       if (result) notify(`SRT를 저장했습니다: ${result.path}`)
@@ -746,6 +829,10 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   const leaveReview = (navigate: () => void): void => {
     void (async () => {
       try {
+        if (!applyInlineDraft()) {
+          notify('시작/종료 시간 형식을 확인하세요.')
+          return
+        }
         await flushSave()
         navigate()
       } catch (cause) {
@@ -777,25 +864,11 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
           {selected && (
             <div className="edit-card">
               <div className="edit-card-heading"><h3>선택한 행 편집</h3><span>{selected.kind === 'dialogue' ? '대사' : '해설'}</span></div>
-              <div className="time-edit-grid">
-                <label>시작<input value={formatTimecode(selected.startMs)} onChange={(event) => { const value = parseTimecode(event.target.value); if (value !== null) updateRow(selected.id, { startMs: value }) }} /></label>
-                <label>종료<input value={formatTimecode(selected.endMs)} onChange={(event) => { const value = parseTimecode(event.target.value); if (value !== null) updateRow(selected.id, { endMs: value }) }} /></label>
-              </div>
+              <p className="help-text" style={{ margin: 0, marginBottom: 10, color: '#596563', fontSize: 12 }}>행 편집은 표에서 직접 수정하세요.</p>
               <div className="button-row compact">
                 <button onClick={() => updateRow(selected.id, { startMs: Math.floor(playhead) * 1000 })}>현재 위치를 시작으로</button>
                 <button onClick={() => updateRow(selected.id, { endMs: Math.ceil(playhead) * 1000 })}>현재 위치를 종료로</button>
               </div>
-              <label className="field-label">분류</label>
-              <div className="segmented-control">
-                <button className={selected.kind === 'dialogue' ? 'active' : ''} onClick={() => updateRow(selected.id, {
-                  kind: 'dialogue',
-                  content: selected.kind === 'descriptionGap' ? (supportsSpeakerLabels ? '[화자1] [화자1] 대사' : '대사') : selected.content,
-                  speakers: supportsSpeakerLabels ? (selected.speakers.length ? selected.speakers : ['화자1']) : []
-                })}>대사</button>
-                <button className={selected.kind === 'descriptionGap' ? 'active' : ''} onClick={() => updateRow(selected.id, { kind: 'descriptionGap', content: DESCRIPTION_TEXT, speakers: [] })}>해설</button>
-              </div>
-              <label className="field-label">화자/내용</label>
-              <textarea value={selected.content} onChange={(event) => updateRow(selected.id, { content: event.target.value })} rows={7} />
               <div className="button-row compact">
                 <button onClick={split}>현재 위치에서 분할</button>
                 <button disabled={selectedIndex === rows.length - 1} onClick={mergeNext}>다음 행과 병합</button>
@@ -864,11 +937,74 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
               <thead><tr><th>분류</th><th>시작</th><th>종료</th><th>간격</th><th>화자/내용</th><th>검수</th></tr></thead>
               <tbody>
                 {rows.map((row) => (
-                  <tr key={row.id} className={`${row.kind === 'descriptionGap' ? 'gap-row' : ''} ${selectedId === row.id ? 'selected-row' : ''}`} onClick={() => { setSelectedId(row.id); mediaRef.current?.seek(row.startMs / 1000) }}>
-                    <td><span className={`kind-badge ${row.kind}`}>{row.kind === 'dialogue' ? '대사' : '해설'}</span></td>
-                    <td>{formatTimecode(row.startMs)}</td><td>{formatTimecode(row.endMs)}</td><td>{Math.max(0, Math.round((row.endMs - row.startMs) / 1000))}</td>
-                    <td className="content-cell">{row.content}</td><td>{row.reviewed ? <span className="reviewed-mark">✓</span> : <span className="unreviewed-mark">—</span>}</td>
-                  </tr>
+                  (() => {
+                    const isEditing = inlineDraft?.rowId === row.id
+                    const draft = isEditing ? inlineDraft : null
+                    return (
+                      <tr key={row.id} className={`${row.kind === 'descriptionGap' ? 'gap-row' : ''} ${selectedId === row.id ? 'selected-row' : ''}`} onClick={() => void chooseRow(row)}>
+                        <td><span className={`kind-badge ${row.kind}`}>{row.kind === 'dialogue' ? '대사' : '해설'}</span></td>
+                        <td>
+                          {isEditing ? (
+                            <input
+                              className={`inline-time-input ${inlineErrors.start && isEditing ? 'inline-field-error' : ''}`}
+                              value={draft?.start ?? formatTimecode(row.startMs)}
+                              onChange={(event) => {
+                                updateInlineDraft({ start: event.target.value })
+                              }}
+                              onBlur={() => void applyInlineDraft()}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault()
+                                  applyInlineDraft()
+                                }
+                              }}
+                            />
+                          ) : (
+                            formatTimecode(row.startMs)
+                          )}
+                          {inlineErrors.start && isEditing && <small className="inline-error-hint">{inlineErrors.start}</small>}
+                        </td>
+                        <td>
+                          {isEditing ? (
+                            <input
+                              className={`inline-time-input ${inlineErrors.end && isEditing ? 'inline-field-error' : ''}`}
+                              value={draft?.end ?? formatTimecode(row.endMs)}
+                              onChange={(event) => {
+                                updateInlineDraft({ end: event.target.value })
+                              }}
+                              onBlur={() => void applyInlineDraft()}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault()
+                                  applyInlineDraft()
+                                }
+                              }}
+                            />
+                          ) : (
+                            formatTimecode(row.endMs)
+                          )}
+                          {inlineErrors.end && isEditing && <small className="inline-error-hint">{inlineErrors.end}</small>}
+                        </td>
+                        <td>{Math.max(0, Math.round((row.endMs - row.startMs) / 1000))}</td>
+                        <td className="content-cell">
+                          {isEditing ? (
+                            <textarea
+                              className="inline-content-editor"
+                              value={draft?.content ?? row.content}
+                              onChange={(event) => {
+                                updateInlineDraft({ content: event.target.value })
+                              }}
+                              onBlur={() => void applyInlineDraft()}
+                              rows={3}
+                            />
+                          ) : (
+                            row.content
+                          )}
+                        </td>
+                        <td>{row.reviewed ? <span className="reviewed-mark">✓</span> : <span className="unreviewed-mark">—</span>}</td>
+                      </tr>
+                    )
+                  })()
                 ))}
               </tbody>
             </table>

@@ -194,6 +194,38 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .script-table tr.gap-row { background: var(--pink); font-weight: 800; }
 .script-table tr.selected-row { outline: 2px solid var(--green); outline-offset: -2px; }
 .content-cell { line-height: 1.6; word-break: keep-all; }
+.inline-time-input,
+.inline-content-editor {
+  width: 100%;
+  border: 1px solid #d0d6d1;
+  border-radius: 8px;
+  background: white;
+  color: var(--ink);
+  outline: none;
+  padding: 5px 7px;
+  font-size: 12px;
+}
+.inline-content-editor {
+  min-height: 56px;
+  resize: vertical;
+  line-height: 1.5;
+  font-family: inherit;
+}
+.inline-time-input:focus,
+.inline-content-editor:focus {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px #195c4b15;
+}
+.inline-field-error,
+.inline-time-input.inline-field-error {
+  border-color: #e84f4f;
+}
+.inline-error-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #d13b3b;
+}
 .kind-badge { font-size: 10px; font-weight: 900; color: #44504d; }
 .kind-badge.descriptionGap { color: #943c5a; }
 .reviewed-mark { color: var(--green); font-weight: 900; }.unreviewed-mark { color: #b4bab7; }
