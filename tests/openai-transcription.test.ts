@@ -3,15 +3,17 @@ import OpenAI from 'openai'
 import {
   TranscriptionFailure,
   classifyOpenAiError,
-  normalizeDiarizedResponse
+  normalizeDiarizedResponse,
+  shouldRetryWithAudioFallback,
+  shouldRetryWithoutLanguage
 } from '@main/services/openai-transcription'
 
 function headers(): Headers {
   return new Headers({ 'x-request-id': 'req_safe_test' })
 }
 
-function apiBody(code: string | null, type = 'invalid_request_error'): Record<string, unknown> {
-  return { code, type, message: '원문 서버 오류는 사용자 메시지에 포함되면 안 됩니다.' }
+function apiBody(code: string | null, type = 'invalid_request_error', param?: string, message = '원문 서버 오류는 사용자 메시지에 포함되면 안 됩니다.'): Record<string, unknown> {
+  return { code, type, param, message }
 }
 
 describe('classifyOpenAiError', () => {
@@ -26,6 +28,36 @@ describe('classifyOpenAiError', () => {
 
     expect(result).toMatchObject({ code, status, requestId: 'req_safe_test', retryable: false })
     expect(result.message).not.toContain('원문 서버 오류')
+  })
+
+  it('400 오류의 코드·유형·파라미터·정제된 상세를 보존한다', () => {
+    const source = new OpenAI.BadRequestError(
+      400,
+      apiBody('invalid_audio', 'invalid_request_error', 'file', 'cannot decode C:\\Users\\sample\\secret\\transcription.webm sk-proj-abcdefghijklmnop'),
+      undefined,
+      headers()
+    )
+    const result = classifyOpenAiError(source)
+
+    expect(result).toMatchObject({
+      code: 'OPENAI_UNPROCESSABLE_AUDIO',
+      apiCode: 'invalid_audio',
+      apiType: 'invalid_request_error',
+      apiParam: 'file',
+      status: 400,
+      requestId: 'req_safe_test'
+    })
+    expect(result.apiDetail).not.toContain('sample')
+    expect(result.apiDetail).not.toContain('sk-proj-')
+  })
+
+  it.each([
+    ['file_too_large', 'OPENAI_AUDIO_TOO_LARGE', 'file', 'file exceeds 25 MB'],
+    ['model_not_available', 'OPENAI_MODEL_UNAVAILABLE', 'model', 'model unavailable'],
+    ['invalid_parameter', 'OPENAI_BAD_REQUEST', 'response_format', 'unsupported response format']
+  ])('400 오류를 %s 유형으로 분류한다', (sourceCode, expectedCode, param, message) => {
+    const source = new OpenAI.BadRequestError(400, apiBody(sourceCode, 'invalid_request_error', param, message), undefined, headers())
+    expect(classifyOpenAiError(source)).toMatchObject({ code: expectedCode, apiParam: param, apiCode: sourceCode })
   })
 
   it.each([
@@ -88,6 +120,16 @@ describe('classifyOpenAiError', () => {
   it('이미 안전하게 분류한 오류는 그대로 유지한다', () => {
     const source = new TranscriptionFailure('OPENAI_RESPONSE_INVALID', '안전한 메시지')
     expect(classifyOpenAiError(source)).toBe(source)
+  })
+
+  it('화자 분리를 유지한 채 language 오류만 한 번 생략할 수 있다', () => {
+    const languageError = classifyOpenAiError(new OpenAI.BadRequestError(400, apiBody('unsupported_parameter', 'invalid_request_error', 'language', 'language is not supported'), undefined, headers()))
+    const audioError = classifyOpenAiError(new OpenAI.BadRequestError(400, apiBody('invalid_audio', 'invalid_request_error', 'file', 'decode failed'), undefined, headers()))
+    expect(shouldRetryWithoutLanguage(languageError)).toBe(true)
+    expect(shouldRetryWithoutLanguage(audioError)).toBe(false)
+    expect(shouldRetryWithAudioFallback(audioError, 'transcription.webm', 60_000)).toBe(true)
+    expect(shouldRetryWithAudioFallback(audioError, 'transcription.mp3', 60_000)).toBe(false)
+    expect(shouldRetryWithAudioFallback(audioError, 'transcription.webm')).toBe(false)
   })
 })
 

@@ -29,8 +29,52 @@ describe('로컬 진단 보고서', () => {
       lastError: 'C:\\Users\\sample\\secret\\video.mp4 대사 비공개'
     })
     const serialized = JSON.stringify(report)
-    expect(serialized).not.toContain('sample')
+    expect(serialized).not.toContain('C:\\Users\\sample')
     expect(serialized).not.toContain('대사 비공개')
     expect(serialized).toContain('WHISPER_FAILED')
+  })
+
+  it('OpenAI 오류의 안전한 필드와 업로드 음성 메타데이터를 기록한다', async () => {
+    const report = await buildLocalDiagnosticReport({
+      schemaVersion: 1,
+      id: 'openai-project',
+      title: '제목',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      status: 'error',
+      transcriptionEngine: 'openai',
+      source: { kind: 'local', uri: 'C:\\Users\\sample\\video.mp4', displayName: 'video.mp4', localMediaPath: 'C:\\Users\\sample\\video.mp4' },
+      media: { durationMs: 60_000 },
+      segments: [],
+      rows: [],
+      runs: [{
+        id: 'run',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        provider: 'openai',
+        model: 'gpt-4o-transcribe-diarize',
+        errorCode: 'OPENAI_UNPROCESSABLE_AUDIO',
+        httpStatus: 400,
+        requestId: 'req_safe_test',
+        apiCode: 'invalid_audio',
+        apiType: 'invalid_request_error',
+        apiParam: 'file',
+        apiDetail: 'cannot decode C:\\Users\\sample\\video.webm sk-proj-abcdefghijklmnop',
+        openaiRequest: { model: 'gpt-4o-transcribe-diarize', responseFormat: 'diarized_json', chunkingStrategy: 'auto', language: 'ko' },
+        openaiAudio: { extension: '.webm', bytes: 100, durationMs: 60_000, codec: 'opus', sampleRate: 48_000, channels: 1 }
+      }],
+      exports: []
+    })
+    const serialized = JSON.stringify(report)
+    expect(report.latestRun).toMatchObject({
+      httpStatus: 400,
+      requestId: 'req_safe_test',
+      apiCode: 'invalid_audio',
+      apiParam: 'file',
+      openaiAudio: { extension: '.webm', codec: 'opus' }
+    })
+    expect(serialized).not.toContain('C:\\Users\\sample')
+    expect(serialized).not.toContain('sk-proj-')
+    expect(serialized).not.toContain('video.webm')
+    expect(serialized).toContain('diarized_json')
   })
 })

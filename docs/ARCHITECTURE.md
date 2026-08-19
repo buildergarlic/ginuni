@@ -16,7 +16,7 @@
 1. 로컬 파일 경로나 공개·일부공개 유튜브 URL로 `ScriptProject`를 만듭니다. 유튜브 입력은 고정 버전의 공식 `yt-dlp` 독립 실행 파일과 Deno 런타임으로 메타데이터와 음성을 가져옵니다.
 2. FFprobe로 길이를 확인하고 3시간 초과 입력을 거부합니다.
 3. 로컬 모드는 FFmpeg로 16kHz 모노 PCM WAV를 만들고, `whisper.cpp` small-q5_1 모델과 Silero VAD로 이 PC에서 처리합니다.
-4. OpenAI 모드는 16kHz 모노 WebM/Opus 음성을 만들고 24.5MB를 검사한 뒤 `gpt-4o-transcribe-diarize`에 `diarized_json`, `chunking_strategy: auto`, `language: ko`로 전사합니다.
+4. OpenAI 모드는 16kHz 모노 WebM/Opus 음성을 만들고 24.5MB와 오디오 스트림을 검사한 뒤 `gpt-4o-transcribe-diarize`에 `diarized_json`, `chunking_strategy: auto`, `language: ko`로 전사합니다. 서버가 오디오 형식 오류를 명시한 경우에만 MP3로 한 번 재인코딩해 같은 화자 분리 요청을 재시도합니다.
 5. 로컬 모드는 화자를 추정하지 않고 대사 내용만 기록하며, OpenAI 모드는 화자를 최초 등장 순서대로 `화자1`, `화자2`에 대응시킵니다.
 6. 시작을 초 단위 내림, 종료를 올림하고 2초 미만 공백은 합칩니다. 2초 이상 공백은 해설 후보 행으로 만듭니다.
 7. 연속 대사는 가능한 발화 경계에서 60초 이하 행으로 나눕니다.
@@ -47,6 +47,7 @@
 - 로컬 처리 오류는 원본 확인, FFprobe, 음성 변환, 모델 준비, Whisper 실행, 결과 읽기 단계로 분류합니다.
 - `runProcess`는 stdout·stderr·종료 코드·시그널을 구조화하고, 프로젝트에는 정제된 오류 요약만 저장합니다.
 - 오류 화면의 진단 파일은 앱·Windows·아키텍처·실행 파일 상태와 정제된 오류만 포함하며 음성·대사·API 키·원본 전체 경로를 기록하지 않습니다.
+- OpenAI 실패 이력은 HTTP 상태·요청 ID·안전한 API 오류 필드와 요청 형식, 업로드 음성의 확장자·크기·코덱·재생 시간만 기록합니다. 비화자 모델로 자동 전환하지 않습니다.
 - 로컬 모델은 파일 크기와 고정 SHA-256을 확인하며 불일치 시 임시 파일 다운로드 후 원자적으로 복구합니다.
 
 ## 로컬 모델
@@ -76,7 +77,7 @@ ZIP의 `mimetype`은 항상 첫 항목이며 무압축입니다.
 
 - API 키는 Electron `safeStorage`로 암호화하고 `userData/settings.json`에 암호문만 저장합니다.
 - 프로젝트 JSON에는 키가 들어가지 않습니다.
-- OpenAI 실패 이력에는 안전한 분류 코드, HTTP 상태, 요청 ID만 저장하고 SDK 원문, 음성, 대사, API 키는 저장하지 않습니다.
+- OpenAI 실패 이력에는 안전한 분류 코드, HTTP 상태, 요청 ID, 정제된 오류 필드와 업로드 음성 메타데이터만 저장하고 SDK 원문, 음성, 대사, API 키는 저장하지 않습니다.
 - 로컬 모드에서는 영상·음성·대사를 외부 전사 서비스로 전송하지 않습니다.
 - IPC는 미리 정의한 메서드만 preload에서 노출합니다.
 - About·후원 화면의 GitHub 저장소, GitHub Sponsors, Threads, 이메일, 카카오 오픈채팅은 고정 IPC 허용 목록으로만 엽니다. 렌더러가 임의 URL을 열 수 없습니다.

@@ -81,6 +81,28 @@ export interface ProcessingRun {
   modelIntegrity?: LocalModelStatus['integrity']
   httpStatus?: number
   requestId?: string
+  apiCode?: string
+  apiType?: string
+  apiParam?: string
+  apiDetail?: string
+  openaiRequest?: OpenAiRequestInfo
+  openaiAudio?: OpenAiAudioInfo
+}
+
+export interface OpenAiRequestInfo {
+  model: string
+  responseFormat: string
+  chunkingStrategy: string
+  language?: string
+}
+
+export interface OpenAiAudioInfo {
+  extension?: string
+  bytes?: number
+  durationMs?: number
+  codec?: string
+  sampleRate?: number
+  channels?: number
 }
 
 export interface ExportRecord {
@@ -126,6 +148,7 @@ export interface ProcessingProgress {
 export interface TranscriptionRequest {
   audioPath: string
   language: string
+  durationMs?: number
   signal?: AbortSignal
   onProgress?: (percent: number) => void
 }
@@ -173,7 +196,7 @@ export interface LocalDiagnosticReport {
     sourceSizeBytes?: number
     durationMs: number
   }
-  latestRun?: Pick<ProcessingRun, 'id' | 'provider' | 'model' | 'startedAt' | 'completedAt' | 'errorCode' | 'errorStage' | 'exitCode' | 'stderrSummary' | 'modelIntegrity'>
+  latestRun?: Pick<ProcessingRun, 'id' | 'provider' | 'model' | 'startedAt' | 'completedAt' | 'errorCode' | 'errorStage' | 'exitCode' | 'stderrSummary' | 'modelIntegrity' | 'httpStatus' | 'requestId' | 'apiCode' | 'apiType' | 'apiParam' | 'apiDetail' | 'openaiRequest' | 'openaiAudio'>
   lastError?: string
   localModel: LocalModelStatus
   runtimes: RuntimeDiagnostic[]
