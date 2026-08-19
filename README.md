@@ -6,7 +6,7 @@
 
 [화면해설 대본 도구 v0.5.0-beta.1 설치 파일 내려받기](https://github.com/buildergarlic/ginuni/releases/download/v0.5.0-beta.1/ScreenDescriptionScriptMaker-0.5.0-beta.1-Setup.exe)
 
-- Windows 10/11 x64용 설치 파일이며 약 296MB입니다.
+- Windows 10/11 x64용 설치 파일이며 약 237MB입니다.
 - 새 버전과 체크섬은 [GiNuNi Releases](https://github.com/buildergarlic/ginuni/releases)에서 확인할 수 있습니다.
 - 현재 베타 설치본은 코드 서명 전이므로 Windows SmartScreen이 표시되면 게시자와 파일 출처를 확인한 뒤 실행하세요.
 
