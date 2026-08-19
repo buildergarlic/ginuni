@@ -2,17 +2,17 @@
 
 영상 파일 또는 공개·일부공개 유튜브 링크에서 음성과 화자를 분석하고, 화면해설작가가 검수한 뒤 한컴오피스용 HWPX 대본으로 저장하는 Windows 앱입니다.
 
-## Windows 설치 파일 다운로드
+## 최신 버전 다운로드
 
-**[화면해설 대본 도구 v0.4.0-beta.4 설치 파일 내려받기](https://github.com/buildergarlic/ginuni/releases/download/v0.4.0-beta.4/ScreenDescriptionScriptMaker-0.4.0-beta.4-Setup.exe)**
+**[화면해설 대본 도구 v0.4.0-beta.5 설치 파일 내려받기](https://github.com/buildergarlic/ginuni/releases/download/v0.4.0-beta.5/ScreenDescriptionScriptMaker-0.4.0-beta.5-Setup.exe)**
 
-- Windows 10/11용 설치 파일이며 약 153MB입니다.
+- Windows 10/11용 설치 파일이며 약 198MB입니다.
 - 새 버전과 체크섬은 [GiNuNi Releases](https://github.com/buildergarlic/ginuni/releases)에서 확인할 수 있습니다.
 - 현재 베타 설치본은 코드 서명 전이므로 Windows SmartScreen이 표시되면 게시자와 파일 출처를 확인한 뒤 실행하세요.
 
 ## 현재 버전
 
-- 버전: `0.4.0-beta.4`
+- 버전: `0.4.0-beta.5`
 - 운영체제: Windows 10/11
 - 입력 길이: 최대 3시간
 - 기본 언어: 한국어
