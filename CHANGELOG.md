@@ -2,7 +2,7 @@
 
 이 프로젝트는 [Semantic Versioning](https://semver.org/)을 따릅니다.
 
-## [미정]
+## [0.4.0-beta.6] - 2026-08-19
 
 ### 추가
 
