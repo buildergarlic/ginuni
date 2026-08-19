@@ -2,6 +2,12 @@
 
 이 프로젝트는 [Semantic Versioning](https://semver.org/)을 따릅니다.
 
+## [0.4.0-beta.5] - 2026-08-19
+
+### 수정
+
+- Windows 설치본에 Chocolatey shim이 아닌 독립 실행 가능한 FFmpeg·FFprobe 바이너리만 포함하도록 검증해 로컬 분석 시작 시 `ffprobe.exe` 종료 코드 `-1` 오류 해결
+
 ## [0.4.0-beta.4] - 2026-08-19
 
 ### 추가

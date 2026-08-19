@@ -10,14 +10,18 @@ import yauzl from 'yauzl'
 const targetDirectory = join(process.cwd(), 'resources', 'bin')
 await mkdir(targetDirectory, { recursive: true })
 
-function resolveCommand(command) {
-  const result = execFileSync('where.exe', [command], { encoding: 'utf8' })
-  return result.split(/\r?\n/).map((value) => value.trim()).find(Boolean)
+function resolveCommands(command) {
+  try {
+    const result = execFileSync('where.exe', [command], { encoding: 'utf8' })
+    return result.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)
+  } catch {
+    return []
+  }
 }
 
-function commandIncludes(executable, value) {
+function commandIncludes(executable, value, args = ['--version']) {
   try {
-    return execFileSync(executable, ['--version'], { encoding: 'utf8' }).includes(value)
+    return execFileSync(executable, args, { encoding: 'utf8' }).includes(value)
   } catch {
     return false
   }
@@ -32,11 +36,45 @@ async function fileSha256(path) {
 }
 
 for (const [command, target] of [['ffmpeg', 'ffmpeg.exe'], ['ffprobe', 'ffprobe.exe']]) {
-  const source = resolveCommand(command)
-  if (!source) throw new Error(`${command} 실행 파일을 찾을 수 없습니다.`)
   const targetPath = join(targetDirectory, target)
+  const expectedVersionText = `${command} version`
+
+  if (await exists(targetPath) && commandIncludes(targetPath, expectedVersionText, ['-version'])) {
+    process.stdout.write(`Verified ${command}: ${targetPath}\n`)
+    continue
+  }
+
+  const chocolateyRoot = process.env.ChocolateyInstall ?? 'C:\\ProgramData\\chocolatey'
+  const candidates = [
+    join(chocolateyRoot, 'lib', 'ffmpeg', 'tools', 'ffmpeg', 'bin', target),
+    join(chocolateyRoot, 'lib', 'ffmpeg', 'tools', 'bin', target),
+    ...resolveCommands(command)
+  ]
+  const downloadPath = `${targetPath}.download`
+  let synced = false
+
   await mkdir(dirname(targetPath), { recursive: true })
-  await copyFile(source, targetPath)
+  for (const source of [...new Set(candidates)]) {
+    if (!await exists(source) || source.toLowerCase() === targetPath.toLowerCase()) continue
+    await rm(downloadPath, { force: true })
+    await copyFile(source, downloadPath)
+
+    // Chocolatey의 bin 경로는 실제 실행 파일이 아니라 상대 경로를 사용하는 shim일 수 있다.
+    // 복사본 자체를 실행해 검증해야 설치본에 깨진 shim이 포함되지 않는다.
+    if (!commandIncludes(downloadPath, expectedVersionText, ['-version'])) {
+      await rm(downloadPath, { force: true })
+      continue
+    }
+
+    await rm(targetPath, { force: true })
+    await rename(downloadPath, targetPath)
+    synced = true
+    break
+  }
+
+  if (!synced || !commandIncludes(targetPath, expectedVersionText, ['-version'])) {
+    throw new Error(`${command}의 독립 실행 가능한 바이너리를 찾을 수 없습니다.`)
+  }
   process.stdout.write(`Synced ${command}: ${targetPath}\n`)
 }
 
