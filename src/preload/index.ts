@@ -7,6 +7,7 @@ const api: AppApi = {
   createProject: (input: CreateProjectInput) => ipcRenderer.invoke('project:create', input),
   loadProject: (id: string) => ipcRenderer.invoke('project:load', id),
   saveRows: (id: string, rows: ScriptRow[]) => ipcRenderer.invoke('project:save-rows', id, rows),
+  exportSrt: (id: string) => ipcRenderer.invoke('project:export-srt', id),
   setTranscriptionEngine: (id: string, engine: TranscriptionEngine) => ipcRenderer.invoke('project:set-engine', id, engine),
   processProject: (id: string) => ipcRenderer.invoke('project:process', id),
   cancelProcessing: (id: string) => ipcRenderer.invoke('project:cancel', id),

@@ -6,7 +6,7 @@ import writeFileAtomic from 'write-file-atomic'
 import { APP_SCHEMA_VERSION, PROJECTS_DIRECTORY_NAME } from '@shared/constants'
 import { removeLegacyLocalSpeakerLabels } from '@shared/rows'
 import type { CreateProjectInput, ProjectSummary, ScriptProject, ScriptRow, TranscriptionEngine } from '@shared/types'
-import { safeFileName } from './hwpx'
+import { safeFileName } from './file-name'
 
 const PROJECT_FILE = 'project.json'
 

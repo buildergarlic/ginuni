@@ -615,6 +615,13 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
       if (result) notify(`HWPX를 저장했습니다: ${result.path}`)
     } catch (cause) { notify(errorMessage(cause)) }
   }
+  const exportSubtitle = async (): Promise<void> => {
+    try {
+      await flushSave()
+      const result = await window.screenScript.exportSrt(project.id)
+      if (result) notify(`SRT를 저장했습니다: ${result.path}`)
+    } catch (cause) { notify(errorMessage(cause)) }
+  }
   const leaveReview = (navigate: () => void): void => {
     void (async () => {
       try {
@@ -636,6 +643,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
           <button className="header-link" onClick={() => leaveReview(onSettings)}>설정</button>
           <span className="autosave">{saving ? '저장 중…' : dirty ? '수정됨' : '자동 저장됨'}</span>
           <button className="secondary-button" disabled={!history.length} onClick={undo}>실행 취소</button>
+          <button className="secondary-button" disabled={errors.length > 0 || rows.length === 0} onClick={exportSubtitle}>SRT 내보내기</button>
           <button className="primary-button" disabled={errors.length > 0 || rows.length === 0} onClick={exportDocument}>HWPX 내보내기</button>
         </div>
       </header>

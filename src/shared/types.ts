@@ -65,6 +65,7 @@ export interface ExportRecord {
   path: string
   exportedAt: string
   appVersion: string
+  format?: 'hwpx' | 'srt'
 }
 
 export interface ScriptProject {
@@ -148,6 +149,7 @@ export interface AppApi {
   createProject(input: CreateProjectInput): Promise<ScriptProject>
   loadProject(id: string): Promise<ScriptProject>
   saveRows(id: string, rows: ScriptRow[]): Promise<ScriptProject>
+  exportSrt(id: string): Promise<{ path: string; format: 'srt' } | null>
   setTranscriptionEngine(id: string, engine: TranscriptionEngine): Promise<ScriptProject>
   processProject(id: string): Promise<ScriptProject>
   cancelProcessing(id: string): Promise<void>

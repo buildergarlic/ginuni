@@ -2,6 +2,15 @@
 
 이 프로젝트는 [Semantic Versioning](https://semver.org/)을 따릅니다.
 
+## [미정]
+
+### 추가
+
+- 검수된 행을 기반으로 SRT 자막 파일(`.srt`) 내보내기 추가
+- SRT는 대사(`dialogue`) 행만 내보내고 해설(`descriptionGap`)은 제외
+- OpenAI 실행 행의 화자 메타데이터를 바탕으로 라벨 출력, 로컬 모드는 라벨 없이 출력
+- 확장형 내보내기 공용 유틸(`export-path`)과 SRT 전용 서비스(`srt.ts`) 추가
+
 ## [0.4.0-beta.5] - 2026-08-19
 
 ### 수정

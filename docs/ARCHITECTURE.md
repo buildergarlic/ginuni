@@ -22,6 +22,7 @@
 7. 연속 대사는 가능한 발화 경계에서 60초 이하 행으로 나눕니다.
 8. 검수 변경은 `project.json`에 원자적으로 자동 저장합니다.
 9. 내보낼 때 템플릿의 표 스타일을 복제하고 HWPX XML과 미리보기 텍스트를 갱신합니다.
+10. SRT 내보내기는 같은 검수 행을 직렬화해 `MIME` 제약 없는 자막 형식으로 별도 저장합니다.
 
 로컬 영상 검수는 `media://project/<id>` 사용자 정의 프로토콜을 사용합니다. 메인 프로세스는 원본 파일의 범위 요청에 `206 Partial Content`, `Content-Range`, `Accept-Ranges`로 응답하여 대용량 MP4의 중간·끝 탐색을 지원합니다. 렌더러에 실제 파일 경로를 노출하지 않습니다.
 
@@ -30,6 +31,7 @@
 - `ScriptProject`: 작업 전체, 소스, 미디어, 처리 이력, 내보내기 이력
 - `TranscriptSegment`: 밀리초 단위 화자 발화
 - `ScriptRow`: 작가가 편집하는 대사 또는 해설 행
+- `ExportRecord`: 각 내보내기 작업의 형식(`hwpx`/`srt`)과 경로, 시각을 기록
 - `TranscriptionProvider`: 로컬 Whisper와 OpenAI가 공유하는 전사 추상화
 
 ## 자동 업데이트

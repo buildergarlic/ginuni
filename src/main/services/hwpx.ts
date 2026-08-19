@@ -1,9 +1,9 @@
 import { DOMParser, XMLSerializer, type Document as XmlDocument, type Element as XmlElement } from '@xmldom/xmldom'
-import { access, mkdir } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { DESCRIPTION_TEXT } from '@shared/constants'
 import { formatTimecode, intervalSeconds } from '@shared/timecode'
 import type { ScriptRow } from '@shared/types'
+import { nextVersionedExportPath } from './export-path'
 import { readZipEntries, writeZipEntries } from './zip'
 
 const SECTION_PATH = 'Contents/section0.xml'
@@ -184,28 +184,8 @@ function previewText(title: string, rows: ScriptRow[]): string {
   return lines.join('\r\n')
 }
 
-async function outputExists(filePath: string): Promise<boolean> {
-  try {
-    await access(filePath)
-    return true
-  } catch {
-    return false
-  }
-}
-
-export function safeFileName(value: string): string {
-  const clean = value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/g, '').trim()
-  return clean.slice(0, 120) || '새 프로젝트'
-}
-
 export async function nextVersionedHwpxPath(outputDirectory: string, title: string): Promise<string> {
-  await mkdir(outputDirectory, { recursive: true })
-  const base = `${safeFileName(title)}_화면해설대본`
-  for (let version = 1; version <= 999; version += 1) {
-    const filePath = join(outputDirectory, `${base}_V${String(version).padStart(2, '0')}.hwpx`)
-    if (!(await outputExists(filePath))) return filePath
-  }
-  throw new Error('내보내기 버전 번호가 999를 초과했습니다.')
+  return nextVersionedExportPath(outputDirectory, title, 'hwpx')
 }
 
 export async function buildHwpx(options: {

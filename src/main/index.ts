@@ -10,6 +10,7 @@ import { createMediaProtocolHandler } from './services/media-protocol'
 import { LocalWhisperTranscriptionProvider } from './services/local-transcription'
 import { deleteLocalModel, ensureLocalModel, localModelStatus } from './services/local-model'
 import { OpenAiTranscriptionProvider, TranscriptionFailure } from './services/openai-transcription'
+import { buildAndWriteSrt } from './services/srt'
 import {
   createProject,
   deleteProject,
@@ -48,6 +49,11 @@ function sendProgress(progress: ProcessingProgress): void {
 
 function sendModelProgress(progress: ModelDownloadProgress): void {
   mainWindow?.webContents.send('model:progress', progress)
+}
+
+function supportsSpeakerLabels(project: ScriptProject): boolean {
+  const latestSuccessfulProvider = project.runs.filter((run) => run.completedAt && !run.errorCode).at(-1)?.provider
+  return (latestSuccessfulProvider ?? project.transcriptionEngine) === 'openai'
 }
 
 async function processProject(id: string): Promise<ScriptProject> {
@@ -197,6 +203,35 @@ function registerIpc(): void {
     await saveProject(project)
     shell.showItemInFolder(outputPath)
     return { path: outputPath }
+  })
+
+  ipcMain.handle('project:export-srt', async (_event, id: string) => {
+    const project = await loadProject(id)
+    const errors = validateRows(project.rows)
+    if (errors.length > 0) throw new Error(errors[0])
+    if (!project.rows.some((row) => row.kind === 'dialogue')) throw new Error('내보낼 대사 행이 없습니다.')
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: 'SRT 저장 폴더 선택',
+      defaultPath: join(projectsRoot(), '..', 'Exports'),
+      properties: ['openDirectory', 'createDirectory']
+    })
+    if (result.canceled) return null
+    const output = await buildAndWriteSrt({
+      outputDirectory: result.filePaths[0],
+      projectTitle: project.title,
+      rows: project.rows,
+      includeSpeakerLabels: supportsSpeakerLabels(project)
+    })
+    project.status = 'exported'
+    project.exports.push({
+      path: output.path,
+      exportedAt: new Date().toISOString(),
+      appVersion: appVersion(),
+      format: 'srt'
+    })
+    await saveProject(project)
+    shell.showItemInFolder(output.path)
+    return output
   })
 
   ipcMain.handle('settings:save-api-key', (_event, key: string) => saveApiKey(key))
