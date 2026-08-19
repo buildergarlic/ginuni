@@ -757,6 +757,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   const errors = useMemo(() => validateRows(rows), [rows])
   const selectedIndex = rows.findIndex((row) => row.id === selectedId)
   const contextMenuIndex = contextMenu ? rows.findIndex((row) => row.id === contextMenu.rowId) : -1
+  const contextMenuRow = contextMenu ? rows.find((row) => row.id === contextMenu.rowId) ?? null : null
   const selected = rows[selectedIndex]
   const latestRun = project.runs.at(-1)
   const supportsSpeakerLabels = projectSupportsSpeakerLabels(project)
@@ -1403,8 +1404,8 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                 <button className="row-context-item" onClick={() => void runInsertBeforeInContext()}>위에 행 추가</button>
                 <button className="row-context-item" onClick={() => void runInsertAfterInContext()}>아래에 행 추가</button>
                 <button className="row-context-item" onClick={() => void runSplitOnContextRow()}>현재 위치에서 분할</button>
-                <button className="row-context-item" onClick={() => void convertContextRowKind('dialogue')}>대사로 전환</button>
-                <button className="row-context-item" onClick={() => void convertContextRowKind('descriptionGap')}>해설로 전환</button>
+                <button className="row-context-item" onClick={() => void convertContextRowKind('dialogue')} disabled={contextMenuRow?.kind === 'dialogue'}>대사로 전환</button>
+                <button className="row-context-item" onClick={() => void convertContextRowKind('descriptionGap')} disabled={contextMenuRow?.kind === 'descriptionGap'}>해설로 전환</button>
                 <button className="row-context-item" onClick={() => void runMergeOnContextRow()} disabled={contextMenuIndex < 0 || contextMenuIndex >= rows.length - 1}>다음 행과 병합</button>
                 <button className="row-context-item danger" onClick={() => void runDeleteOnContextRow()}>행 삭제</button>
               </div>
