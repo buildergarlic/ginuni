@@ -1,5 +1,5 @@
 export const APP_NAME = '화면해설 대본 도구'
-export const APP_SCHEMA_VERSION = 1
+export const APP_SCHEMA_VERSION = 2
 export const OPENAI_MODEL = 'gpt-4o-transcribe-diarize'
 export const LOCAL_MODEL_NAME = 'Whisper small (다국어, Q5)'
 export const LOCAL_MODEL_FILE = 'ggml-small-q5_1.bin'
@@ -7,6 +7,15 @@ export const LOCAL_MODEL_BYTES = 190_085_487
 export const LOCAL_MODEL_SHA256 = 'ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb'
 export const LOCAL_MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small-q5_1.bin?download=true'
 export const LOCAL_ENGINE_VERSION = 'whisper.cpp v1.9.2 / small-q5_1'
+export const DIARIZATION_ENGINE_VERSION = 'sherpa-onnx v1.13.6'
+export const DIARIZATION_SEGMENTATION_MODEL = 'pyannote segmentation 3.0 int8'
+export const DIARIZATION_EMBEDDING_MODEL = '3D-Speaker ERes2Net base 16k'
+export const DIARIZATION_SEGMENTATION_FILE = 'pyannote-segmentation-3.0.int8.onnx'
+export const DIARIZATION_SEGMENTATION_BYTES = 1_540_506
+export const DIARIZATION_SEGMENTATION_SHA256 = 'd582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d'
+export const DIARIZATION_EMBEDDING_FILE = '3dspeaker-eres2net-base-16k.onnx'
+export const DIARIZATION_EMBEDDING_BYTES = 39_593_761
+export const DIARIZATION_EMBEDDING_SHA256 = '1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b'
 export const MAX_DURATION_MS = 3 * 60 * 60 * 1000
 export const MAX_UPLOAD_BYTES = 24_500_000
 export const TARGET_UPLOAD_BYTES = 23_500_000

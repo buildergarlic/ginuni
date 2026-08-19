@@ -64,6 +64,7 @@ describe('removeLegacyLocalSpeakerLabels', () => {
       updatedAt: '2026-01-01T00:00:00.000Z',
       status: 'review',
       transcriptionEngine: provider,
+      localDiarization: { mode: 'none', speakerCount: null },
       source: { kind: 'local', uri: 'video.mp4', displayName: 'video.mp4' },
       media: { durationMs: 2_000 },
       segments: [segment('a', 0, 2_000, '화자1', '대사')],

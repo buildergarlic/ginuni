@@ -5,7 +5,8 @@ import { writeFile } from 'node:fs/promises'
 import { totalmem } from 'node:os'
 import { LOCAL_ENGINE_VERSION, OPENAI_MODEL } from '@shared/constants'
 import { generateScriptRows, validateRows } from '@shared/rows'
-import type { CreateProjectInput, ExternalLinkTarget, LocalModelStatus, ModelDownloadProgress, ProcessingProgress, ProcessingRun, ScriptProject, ScriptRow, TranscriptionEngine } from '@shared/types'
+import { supportsSpeakerLabels } from '@shared/speaker-labels'
+import type { CreateProjectInput, ExternalLinkTarget, LocalDiarizationConfig, LocalModelStatus, ModelDownloadProgress, ProcessingProgress, ProcessingRun, ProcessingWarning, ScriptProject, ScriptRow, TranscriptionEngine } from '@shared/types'
 import { buildHwpx, nextVersionedHwpxPath } from './services/hwpx'
 import { prepareMedia } from './services/media'
 import { createMediaProtocolHandler } from './services/media-protocol'
@@ -22,6 +23,7 @@ import {
   projectsRoot,
   saveProject,
   saveRows,
+  setLocalDiarizationConfig,
   setTranscriptionEngine
 } from './services/project-store'
 import { appVersion, templatePath } from './services/runtime'
@@ -30,6 +32,13 @@ import { classifyProcessFailure, LocalProcessingError, sanitizeDiagnosticText } 
 import { clearApiKey, getApiKey, hasApiKey, saveApiKey } from './services/settings-store'
 import { installYouTubeClientIdentity } from './services/youtube-client-identity'
 import { checkForAppUpdates, configureAppUpdater, getAppUpdateStatus, installAppUpdate } from './services/app-updater'
+import { diarizationBundleStatus } from './services/diarization-bundle'
+import {
+  applyDiarization,
+  DIARIZATION_METADATA,
+  DiarizationExecutionError,
+  SherpaOnnxDiarizationProvider
+} from './services/speaker-diarization'
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'media', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } }
@@ -55,11 +64,6 @@ function sendModelProgress(progress: ModelDownloadProgress): void {
   mainWindow?.webContents.send('model:progress', progress)
 }
 
-function supportsSpeakerLabels(project: ScriptProject): boolean {
-  const latestSuccessfulProvider = project.runs.filter((run) => run.completedAt && !run.errorCode).at(-1)?.provider
-  return (latestSuccessfulProvider ?? project.transcriptionEngine) === 'openai'
-}
-
 async function processProject(id: string): Promise<ScriptProject> {
   if (activeJobs.has(id)) throw new Error('이미 처리 중인 프로젝트입니다.')
 
@@ -67,6 +71,7 @@ async function processProject(id: string): Promise<ScriptProject> {
   activeJobs.set(id, controller)
   const project = await loadProject(id)
   const engine = project.transcriptionEngine ?? 'openai'
+  const localDiarization = project.localDiarization ?? { mode: 'none', speakerCount: null }
   const run: ProcessingRun = {
     id: randomUUID(),
     startedAt: new Date().toISOString(),
@@ -81,6 +86,20 @@ async function processProject(id: string): Promise<ScriptProject> {
   const progress = (value: Omit<ProcessingProgress, 'projectId'>): void => sendProgress({ projectId: id, ...value })
   let apiKey: string | null = null
   let modelIntegrity: LocalModelStatus['integrity'] | undefined
+
+  const addWarning = (warning: ProcessingWarning): void => {
+    run.warnings = [...(run.warnings ?? []), warning]
+  }
+
+  const diarizationFallback = (warning: ProcessingWarning): void => {
+    run.diarization = {
+      ...DIARIZATION_METADATA,
+      engine: 'sherpa-onnx',
+      requestedSpeakerCount: localDiarization.speakerCount,
+      status: 'fallback'
+    }
+    addWarning(warning)
+  }
 
   try {
     apiKey = engine === 'openai' ? await getApiKey() : null
@@ -127,19 +146,100 @@ async function processProject(id: string): Promise<ScriptProject> {
       percent: 55,
       message: engine === 'local' ? '이 PC에서 음성을 분석하고 있습니다. 영상 길이에 따라 시간이 걸릴 수 있습니다.' : '음성과 화자를 분석하고 있습니다.'
     })
-    const provider = engine === 'local'
-      ? new LocalWhisperTranscriptionProvider(modelPath!)
-      : new OpenAiTranscriptionProvider(apiKey!)
-    project.segments = await provider.transcribe({
+    const transcriptionRequest = {
       audioPath: project.media.audioPath!,
       language: 'ko',
       durationMs: project.media.durationMs,
-      signal: controller.signal,
-      onProgress: engine === 'local'
-        ? (percent) => progress({ stage: 'transcribing', percent: 55 + Math.round(percent * 0.3), message: `이 PC에서 음성을 분석하고 있습니다. (${percent}%)` })
-        : undefined
-    })
-    progress({ stage: 'building', percent: 88, message: '대사와 해설 구간을 구성하고 있습니다.' })
+      signal: controller.signal
+    }
+    if (engine === 'local') {
+      const localProvider = new LocalWhisperTranscriptionProvider(modelPath!)
+      if (localDiarization.mode === 'sherpa-onnx') {
+        const detailed = await localProvider.transcribeDetailed({
+          ...transcriptionRequest,
+          onProgress: (percent) => progress({
+            stage: 'transcribing',
+            percent: 50 + Math.round(percent * 0.25),
+            message: `이 PC에서 대사를 분석하고 있습니다. (${percent}%)`
+          })
+        })
+        project.segments = detailed.segments
+        const bundle = await diarizationBundleStatus()
+        if (!bundle.available) {
+          diarizationFallback({
+            code: 'DIARIZATION_MODEL_INVALID',
+            message: '화자 분리 구성 요소가 없거나 손상되어 화자 표기 없이 대사를 만들었습니다.',
+            detail: bundle.integrity
+          })
+        } else {
+          progress({ stage: 'diarizing', percent: 78, message: '이 PC에서 화자를 구분하고 있습니다.' })
+          try {
+            const diarization = await new SherpaOnnxDiarizationProvider().diarize({
+              audioPath: project.media.audioPath!,
+              durationMs: project.media.durationMs,
+              speakerCount: localDiarization.speakerCount,
+              signal: controller.signal,
+              onProgress: (percent) => progress({
+                stage: 'diarizing',
+                percent: 78 + Math.round(percent * 0.18),
+                message: `이 PC에서 화자를 구분하고 있습니다. (${Math.round(percent)}%)`
+              })
+            })
+            if (diarization.length === 0 && detailed.segments.length > 0) {
+              diarizationFallback({
+                code: 'DIARIZATION_OUTPUT_INVALID',
+                message: '화자 구간을 찾지 못해 화자 표기 없이 대사를 만들었습니다.'
+              })
+            } else {
+              const applied = applyDiarization(detailed.segments, detailed.words, diarization)
+              const assignedSpeakerCount = new Set(applied.segments.map((segment) => segment.speakerId).filter(Boolean)).size
+              if (assignedSpeakerCount === 0 && detailed.segments.length > 0) {
+                diarizationFallback({
+                  code: 'DIARIZATION_OUTPUT_INVALID',
+                  message: '대사와 화자 구간을 연결하지 못해 화자 표기 없이 대사를 만들었습니다.'
+                })
+              } else {
+                project.segments = applied.segments
+                run.diarization = {
+                  ...DIARIZATION_METADATA,
+                  engine: 'sherpa-onnx',
+                  requestedSpeakerCount: localDiarization.speakerCount,
+                  detectedSpeakerCount: applied.detectedSpeakerCount,
+                  status: 'succeeded',
+                  unassignedWordCount: applied.unassignedWordCount,
+                  ambiguousWordCount: applied.ambiguousWordCount
+                }
+                if (!applied.usedWordTimestamps && detailed.segments.length > 0) {
+                  addWarning({
+                    code: 'DIARIZATION_WORD_TIMESTAMPS_UNAVAILABLE',
+                    message: '단어 타임스탬프가 없어 문장 구간 단위로 화자를 배정했습니다.'
+                  })
+                }
+              }
+            }
+          } catch (error) {
+            if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error
+            const failure = error instanceof DiarizationExecutionError
+              ? error
+              : new DiarizationExecutionError('DIARIZATION_FAILED', '화자 분리에 실패했습니다.', error instanceof Error ? error.message : undefined)
+            diarizationFallback({
+              code: failure.code,
+              message: `${failure.message} 화자 표기 없이 대사를 만들었습니다.`,
+              detail: sanitizeDiagnosticText(failure.detail),
+              exitCode: failure.exitCode
+            })
+          }
+        }
+      } else {
+        project.segments = await localProvider.transcribe({
+          ...transcriptionRequest,
+          onProgress: (percent) => progress({ stage: 'transcribing', percent: 55 + Math.round(percent * 0.3), message: `이 PC에서 음성을 분석하고 있습니다. (${percent}%)` })
+        })
+      }
+    } else {
+      project.segments = await new OpenAiTranscriptionProvider(apiKey!).transcribe(transcriptionRequest)
+    }
+    progress({ stage: 'building', percent: engine === 'local' && localDiarization.mode === 'sherpa-onnx' ? 97 : 88, message: '대사와 해설 구간을 구성하고 있습니다.' })
     project.rows = generateScriptRows(project.segments, project.media.durationMs)
     project.status = 'review'
     run.completedAt = new Date().toISOString()
@@ -191,6 +291,7 @@ function registerIpc(): void {
     appVersion: appVersion(),
     projectsRoot: projectsRoot(),
     localModel: await localModelStatus(),
+    diarizationBundle: await diarizationBundleStatus(),
     updateStatus: getAppUpdateStatus()
   }))
   ipcMain.handle('app:open-external', async (_event, target: ExternalLinkTarget) => {
@@ -224,6 +325,7 @@ function registerIpc(): void {
   ipcMain.handle('project:load', (_event, id: string) => loadProject(id))
   ipcMain.handle('project:save-rows', (_event, id: string, rows: ScriptRow[]) => saveRows(id, rows))
   ipcMain.handle('project:set-engine', (_event, id: string, engine: TranscriptionEngine) => setTranscriptionEngine(id, engine))
+  ipcMain.handle('project:set-local-diarization', (_event, id: string, config: LocalDiarizationConfig) => setLocalDiarizationConfig(id, config))
   ipcMain.handle('project:process', (_event, id: string) => processProject(id))
   ipcMain.handle('project:cancel', (_event, id: string) => activeJobs.get(id)?.abort())
   ipcMain.handle('project:delete', (_event, id: string) => deleteProject(id))

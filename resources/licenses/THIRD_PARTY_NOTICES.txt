@@ -1,0 +1,19 @@
+GiNuNi local speaker diarization notices
+
+1. sherpa-onnx v1.13.6
+Copyright The Next-gen Kaldi team and contributors.
+Licensed under the Apache License, Version 2.0.
+https://github.com/k2-fsa/sherpa-onnx
+
+2. pyannote segmentation 3.0
+Copyright (c) 2023 CNRS.
+Licensed under the MIT License.
+The full MIT text is included in pyannote-segmentation-MIT.txt.
+https://huggingface.co/pyannote/segmentation-3.0
+
+3. 3D-Speaker ERes2Net speaker embedding model
+Copyright ModelScope / 3D-Speaker contributors.
+Licensed under the Apache License, Version 2.0.
+https://github.com/modelscope/3D-Speaker
+
+The full Apache License 2.0 text is included in Apache-2.0.txt.

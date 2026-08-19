@@ -30,4 +30,11 @@ describe('프로세스 실행 결과', () => {
     await expect(runProcess(process.execPath, ['-e', 'process.stdout.write("ok"); process.stderr.write("bad"); process.exit(7)']))
       .rejects.toMatchObject({ result: { stdout: 'ok', stderr: 'bad', exitCode: 7 } })
   })
+
+  it('취소 신호를 받으면 실행 중인 자식 프로세스를 종료하고 AbortError를 반환한다', async () => {
+    const controller = new AbortController()
+    const running = runProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { signal: controller.signal })
+    setTimeout(() => controller.abort(), 50)
+    await expect(running).rejects.toMatchObject({ name: 'AbortError' })
+  })
 })

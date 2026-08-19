@@ -41,6 +41,7 @@ function buildDialogueContent(segments: TranscriptSegment[]): { speakers: string
  * 사용자가 직접 바꾼 화자명이나 OpenAI 화자 분리 결과는 그대로 둔다.
  */
 export function removeLegacyLocalSpeakerLabels(project: ScriptProject): ScriptProject {
+  if (project.schemaVersion >= 2) return project
   const successfulRuns = project.runs.filter((run) => run.completedAt && !run.errorCode)
   const lastSuccessfulProvider = successfulRuns.at(-1)?.provider
   const rowsWereGeneratedLocally = lastSuccessfulProvider === 'local'

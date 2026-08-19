@@ -5,10 +5,20 @@ import { basename, join, relative, resolve } from 'node:path'
 import writeFileAtomic from 'write-file-atomic'
 import { APP_SCHEMA_VERSION, PROJECTS_DIRECTORY_NAME } from '@shared/constants'
 import { removeLegacyLocalSpeakerLabels } from '@shared/rows'
-import type { CreateProjectInput, ProjectSummary, ScriptProject, ScriptRow, TranscriptionEngine } from '@shared/types'
+import type { CreateProjectInput, LocalDiarizationConfig, ProjectSummary, ScriptProject, ScriptRow, TranscriptionEngine } from '@shared/types'
 import { safeFileName } from './file-name'
 
 const PROJECT_FILE = 'project.json'
+const DEFAULT_DIARIZATION: LocalDiarizationConfig = { mode: 'none', speakerCount: null }
+
+function normalizedDiarization(config?: Partial<LocalDiarizationConfig>): LocalDiarizationConfig {
+  if (config?.mode !== 'sherpa-onnx') return { ...DEFAULT_DIARIZATION }
+  const speakerCount = config.speakerCount
+  if (speakerCount !== null && speakerCount !== undefined && (!Number.isInteger(speakerCount) || speakerCount < 2 || speakerCount > 10)) {
+    throw new Error('화자 수는 자동 또는 2명에서 10명 사이로 지정하세요.')
+  }
+  return { mode: 'sherpa-onnx', speakerCount: speakerCount ?? null }
+}
 
 export function projectsRoot(): string {
   return join(app.getPath('documents'), PROJECTS_DIRECTORY_NAME, 'Projects')
@@ -34,6 +44,7 @@ export async function createProject(input: CreateProjectInput): Promise<ScriptPr
     updatedAt: now,
     status: 'draft',
     transcriptionEngine: input.transcriptionEngine ?? 'local',
+    localDiarization: normalizedDiarization(input.localDiarization),
     source: {
       kind: input.kind,
       uri: input.kind === 'local' ? input.localPath! : input.youtubeUrl!,
@@ -73,7 +84,14 @@ export async function projectDirectory(id: string): Promise<string> {
 export async function loadProject(id: string): Promise<ScriptProject> {
   const directory = await projectDirectory(id)
   const project = JSON.parse(await readFile(join(directory, PROJECT_FILE), 'utf8')) as ScriptProject
-  const normalized = removeLegacyLocalSpeakerLabels(project)
+  const legacyNormalized = removeLegacyLocalSpeakerLabels(project)
+  const normalized: ScriptProject = legacyNormalized.schemaVersion < APP_SCHEMA_VERSION || !legacyNormalized.localDiarization
+    ? {
+        ...legacyNormalized,
+        schemaVersion: APP_SCHEMA_VERSION,
+        localDiarization: normalizedDiarization(legacyNormalized.localDiarization)
+      }
+    : legacyNormalized
   if (normalized !== project) {
     await writeFileAtomic(join(directory, PROJECT_FILE), `${JSON.stringify(normalized, null, 2)}\n`, { encoding: 'utf8' })
   }
@@ -97,6 +115,13 @@ export async function setTranscriptionEngine(id: string, engine: TranscriptionEn
   if (engine !== 'local' && engine !== 'openai') throw new Error('지원하지 않는 음성 분석 방식입니다.')
   const project = await loadProject(id)
   project.transcriptionEngine = engine
+  await saveProject(project)
+  return project
+}
+
+export async function setLocalDiarizationConfig(id: string, config: LocalDiarizationConfig): Promise<ScriptProject> {
+  const project = await loadProject(id)
+  project.localDiarization = normalizedDiarization(config)
   await saveProject(project)
   return project
 }

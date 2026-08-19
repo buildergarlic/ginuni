@@ -2,6 +2,7 @@ export type SourceKind = 'local' | 'youtube'
 export type ScriptRowKind = 'dialogue' | 'descriptionGap'
 export type ProjectStatus = 'draft' | 'processing' | 'review' | 'exported' | 'error'
 export type TranscriptionEngine = 'local' | 'openai'
+export type LocalDiarizationMode = 'none' | 'sherpa-onnx'
 export type ExternalLinkTarget = 'repository' | 'sponsor' | 'threads' | 'email' | 'kakao'
 export type UpdateState = 'disabled' | 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
 export type LocalProcessingStage = 'media' | 'probe' | 'encoding' | 'model' | 'runtime' | 'transcription' | 'output' | 'building'
@@ -18,6 +19,44 @@ export type LocalFailureCode =
   | 'WHISPER_FAILED'
   | 'WHISPER_OUTPUT_INVALID'
   | 'PROCESSING_FAILED'
+
+export type DiarizationWarningCode =
+  | 'DIARIZATION_RUNTIME_BLOCKED'
+  | 'DIARIZATION_MODEL_INVALID'
+  | 'DIARIZATION_INSUFFICIENT_MEMORY'
+  | 'DIARIZATION_FAILED'
+  | 'DIARIZATION_OUTPUT_INVALID'
+  | 'DIARIZATION_WORD_TIMESTAMPS_UNAVAILABLE'
+
+export interface LocalDiarizationConfig {
+  mode: LocalDiarizationMode
+  speakerCount: number | null
+}
+
+export interface DiarizationSegment {
+  startMs: number
+  endMs: number
+  speakerId: string
+}
+
+export interface ProcessingWarning {
+  code: DiarizationWarningCode
+  message: string
+  detail?: string
+  exitCode?: number
+}
+
+export interface DiarizationRunInfo {
+  engine: 'sherpa-onnx'
+  engineVersion: string
+  segmentationModel: string
+  embeddingModel: string
+  requestedSpeakerCount: number | null
+  detectedSpeakerCount?: number
+  status: 'succeeded' | 'fallback'
+  unassignedWordCount?: number
+  ambiguousWordCount?: number
+}
 
 export interface UpdateStatus {
   state: UpdateState
@@ -87,6 +126,8 @@ export interface ProcessingRun {
   apiDetail?: string
   openaiRequest?: OpenAiRequestInfo
   openaiAudio?: OpenAiAudioInfo
+  diarization?: DiarizationRunInfo
+  warnings?: ProcessingWarning[]
 }
 
 export interface OpenAiRequestInfo {
@@ -120,6 +161,7 @@ export interface ScriptProject {
   updatedAt: string
   status: ProjectStatus
   transcriptionEngine?: TranscriptionEngine
+  localDiarization: LocalDiarizationConfig
   source: ProjectSource
   media: MediaInfo
   segments: TranscriptSegment[]
@@ -140,7 +182,7 @@ export interface ProjectSummary {
 
 export interface ProcessingProgress {
   projectId: string
-  stage: 'preparing' | 'downloading' | 'probing' | 'encoding' | 'downloadingModel' | 'transcribing' | 'building' | 'saving' | 'complete'
+  stage: 'preparing' | 'downloading' | 'probing' | 'encoding' | 'downloadingModel' | 'transcribing' | 'diarizing' | 'building' | 'saving' | 'complete'
   percent: number
   message: string
 }
@@ -163,6 +205,7 @@ export interface CreateProjectInput {
   youtubeUrl?: string
   title?: string
   transcriptionEngine?: TranscriptionEngine
+  localDiarization?: LocalDiarizationConfig
 }
 
 export interface LocalModelStatus {
@@ -174,7 +217,7 @@ export interface LocalModelStatus {
 }
 
 export interface RuntimeDiagnostic {
-  name: 'ffmpeg' | 'ffprobe' | 'whisper-cli' | 'vad-model'
+  name: 'ffmpeg' | 'ffprobe' | 'whisper-cli' | 'vad-model' | 'sherpa-diarizer' | 'diarization-segmentation-model' | 'diarization-embedding-model'
   available: boolean
   runnable: boolean
   detail?: string
@@ -196,10 +239,29 @@ export interface LocalDiagnosticReport {
     sourceSizeBytes?: number
     durationMs: number
   }
-  latestRun?: Pick<ProcessingRun, 'id' | 'provider' | 'model' | 'startedAt' | 'completedAt' | 'errorCode' | 'errorStage' | 'exitCode' | 'stderrSummary' | 'modelIntegrity' | 'httpStatus' | 'requestId' | 'apiCode' | 'apiType' | 'apiParam' | 'apiDetail' | 'openaiRequest' | 'openaiAudio'>
+  latestRun?: Pick<ProcessingRun, 'id' | 'provider' | 'model' | 'startedAt' | 'completedAt' | 'errorCode' | 'errorStage' | 'exitCode' | 'stderrSummary' | 'modelIntegrity' | 'httpStatus' | 'requestId' | 'apiCode' | 'apiType' | 'apiParam' | 'apiDetail' | 'openaiRequest' | 'openaiAudio' | 'diarization' | 'warnings'>
   lastError?: string
   localModel: LocalModelStatus
+  diarizationBundle: DiarizationBundleStatus
   runtimes: RuntimeDiagnostic[]
+}
+
+export interface DiarizationBundleComponentStatus {
+  id: 'runtime' | 'segmentation' | 'embedding'
+  name: string
+  available: boolean
+  integrity: 'missing' | 'valid' | 'invalid'
+  sizeBytes: number
+  expectedBytes: number
+}
+
+export interface DiarizationBundleStatus {
+  available: boolean
+  integrity: 'missing' | 'valid' | 'invalid'
+  engineVersion: string
+  installedBytes: number
+  expectedBytes: number
+  components: DiarizationBundleComponentStatus[]
 }
 
 export interface ModelDownloadProgress {
@@ -215,6 +277,7 @@ export interface BootstrapData {
   appVersion: string
   projectsRoot: string
   localModel: LocalModelStatus
+  diarizationBundle: DiarizationBundleStatus
   updateStatus: UpdateStatus
 }
 
@@ -226,6 +289,7 @@ export interface AppApi {
   saveRows(id: string, rows: ScriptRow[]): Promise<ScriptProject>
   exportSrt(id: string): Promise<{ path: string; format: 'srt' } | null>
   setTranscriptionEngine(id: string, engine: TranscriptionEngine): Promise<ScriptProject>
+  setLocalDiarizationConfig(id: string, config: LocalDiarizationConfig): Promise<ScriptProject>
   processProject(id: string): Promise<ScriptProject>
   cancelProcessing(id: string): Promise<void>
   deleteProject(id: string): Promise<void>

@@ -6,6 +6,7 @@ import type { LocalDiagnosticReport, ScriptProject } from '@shared/types'
 import { localModelStatus } from './local-model'
 import { runtimeDiagnostics } from './runtime'
 import { sanitizeDiagnosticText } from './processing-errors'
+import { diarizationBundleStatus } from './diarization-bundle'
 
 function safeMessageForCode(code?: string): string | undefined {
   return ({
@@ -82,10 +83,16 @@ export async function buildLocalDiagnosticReport(project: ScriptProject): Promis
       apiParam: sanitizeDiagnosticText(latestRun.apiParam, 160),
       apiDetail: sanitizeDiagnosticText(latestRun.apiDetail, 600),
       openaiRequest: latestRun.openaiRequest,
-      openaiAudio: latestRun.openaiAudio
+      openaiAudio: latestRun.openaiAudio,
+      diarization: latestRun.diarization,
+      warnings: latestRun.warnings?.map((warning) => ({
+        ...warning,
+        detail: sanitizeDiagnosticText(warning.detail)
+      }))
     } : undefined,
     lastError: safeMessageForCode(latestRun?.errorCode) ?? sanitizeDiagnosticText(project.lastError),
     localModel: await localModelStatus(),
+    diarizationBundle: await diarizationBundleStatus(),
     runtimes
   }
 }

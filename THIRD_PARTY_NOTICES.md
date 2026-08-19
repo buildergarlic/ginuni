@@ -7,6 +7,9 @@
 - **Deno 2.9.5** — MIT License. 최신 유튜브 플레이어 스크립트 해석을 위해 Windows x64 실행 파일을 고정 SHA-256으로 검증해 포함합니다. <https://github.com/denoland/deno>
 - **whisper.cpp v1.9.2** — MIT License. Windows x64 CPU 실행 파일을 설치본에 포함합니다. <https://github.com/ggml-org/whisper.cpp>
 - **Whisper small-q5_1 모델** — 앱에서 사용자가 선택하면 Hugging Face의 `ggerganov/whisper.cpp` 저장소로부터 내려받습니다. 원본 Whisper 모델 및 변환 모델의 라이선스 고지를 따릅니다. <https://huggingface.co/ggerganov/whisper.cpp>
+- **sherpa-onnx v1.13.6 / ONNX Runtime** — Windows x64 화자 분리 CLI와 필요한 공유 라이브러리만 고정 버전·SHA-256으로 검증해 포함합니다. sherpa-onnx는 Apache License 2.0이며 설치본의 `licenses` 폴더에 고지와 전문을 포함합니다. <https://github.com/k2-fsa/sherpa-onnx>
+- **Pyannote segmentation 3.0 int8** — 화자 발화 구간 모델. MIT License이며 설치본의 `licenses` 폴더에 전문을 포함합니다. <https://huggingface.co/pyannote/segmentation-3.0>
+- **3D-Speaker ERes2Net base 16k** — 화자 임베딩 모델. Apache License 2.0 고지와 함께 설치본에 포함합니다. <https://github.com/modelscope/3D-Speaker>
 - **Electron, React, OpenAI Node SDK 및 npm 의존성** — 각 패키지의 `package.json` 라이선스를 따릅니다.
 
-`resources/bin`의 실행 파일은 Git 저장소에 커밋하지 않으며 설치본 생성 직전에 `npm run sync:assets`로 준비합니다.
+`resources/bin`의 실행 파일·DLL·ONNX 모델은 Git 저장소에 커밋하지 않으며 설치본 생성 직전에 `npm run sync:assets`로 준비합니다.
