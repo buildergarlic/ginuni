@@ -1111,6 +1111,29 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
       addBlankRowAtIndex(targetIndex, 'after')
     })
   }
+  const convertContextRowKind = (kind: 'dialogue' | 'descriptionGap'): void => {
+    executeContextAction((targetIndex) => {
+      const row = rows[targetIndex]
+      if (!row) return
+      if (kind === row.kind) return
+
+      if (kind === 'dialogue') {
+        applyRows(rows.map((entry) => entry.id === row.id ? {
+          ...entry,
+          kind: 'dialogue',
+          content: supportsSpeakerLabels && entry.speakers.length === 0 ? '[화자1] 대사' : entry.content,
+          speakers: supportsSpeakerLabels ? (entry.speakers.length ? entry.speakers : ['화자1']) : []
+        } : entry))
+      } else {
+        applyRows(rows.map((entry) => entry.id === row.id ? {
+          ...entry,
+          kind: 'descriptionGap',
+          content: DESCRIPTION_TEXT,
+          speakers: []
+        } : entry))
+      }
+    })
+  }
   const renameSpeaker = (): void => {
     if (!applyInlineDraft()) return
     const from = speakerFrom.trim()
@@ -1380,6 +1403,8 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                 <button className="row-context-item" onClick={() => void runInsertBeforeInContext()}>위에 행 추가</button>
                 <button className="row-context-item" onClick={() => void runInsertAfterInContext()}>아래에 행 추가</button>
                 <button className="row-context-item" onClick={() => void runSplitOnContextRow()}>현재 위치에서 분할</button>
+                <button className="row-context-item" onClick={() => void convertContextRowKind('dialogue')}>대사로 전환</button>
+                <button className="row-context-item" onClick={() => void convertContextRowKind('descriptionGap')}>해설로 전환</button>
                 <button className="row-context-item" onClick={() => void runMergeOnContextRow()} disabled={contextMenuIndex < 0 || contextMenuIndex >= rows.length - 1}>다음 행과 병합</button>
                 <button className="row-context-item danger" onClick={() => void runDeleteOnContextRow()}>행 삭제</button>
               </div>
