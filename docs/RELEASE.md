@@ -11,16 +11,17 @@
 ## 릴리스 절차
 
 1. `main`에서 작업 트리가 깨끗한지 확인합니다.
-2. `npm ci` 후 `npm run verify`를 실행합니다.
+2. 수정 내용을 작고 설명 가능한 커밋으로 정리하고 `npm ci` 후 `npm run verify`를 실행합니다.
 3. 한컴오피스 2022에서 테스트 HWPX가 복구 경고 없이 열리는지 확인합니다.
 4. `npm run dist:win`으로 NSIS 설치본을 생성합니다.
 5. 깨끗한 Windows 10/11 PC에서 설치, 실행, 제거, 한글 경로를 확인합니다.
    `내 PC에서 분석 + 화자 분리(실험)`은 공식 4화자 샘플과 실제 한국어 다화자 영상에서 별도로 확인합니다.
 6. `CHANGELOG.md`와 `package.json` 버전을 갱신합니다.
-7. `git tag vX.Y.Z`를 만들고 원격 저장소에 푸시합니다.
-8. GitHub Actions가 설치본, 블록맵, `latest.yml`, SHA-256을 Releases에 게시했는지 확인한 뒤 베타 참여자에게 전달합니다.
+7. 검증된 커밋을 `main`에 직접 푸시합니다.
+8. `git tag vX.Y.Z`를 만들고 원격 저장소에 푸시합니다.
+9. GitHub Actions가 설치본, 블록맵, `latest.yml`, SHA-256을 Releases에 게시했는지 확인한 뒤 베타 참여자에게 전달합니다.
 
-원격 저장소는 `https://github.com/buildergarlic/ginuni.git`으로 고정합니다. 일반 수정은 `agent/...`, `feature/...`, `fix/...` 브랜치에 푸시하고 PR 검증 후 `main`에 병합합니다.
+원격 저장소는 `https://github.com/buildergarlic/ginuni.git`으로 고정합니다. 관리자와 AI 에이전트의 일반 수정은 로컬 검증 후 `main`에 직접 푸시합니다. PR은 외부 기여자와 사람이 맥락을 공유하고 토론할 필요가 있을 때만 사용합니다. 자동 생성 코드와 자동 스크린샷을 AI가 다시 승인하는 절차는 필수 검증으로 취급하지 않습니다.
 
 설치형 앱은 시작 5초 후 공개 GitHub Releases를 확인합니다. 새 버전은 백그라운드에서 내려받고, 검수 중 수정 내용을 저장한 뒤 사용자가 **재시작하여 업데이트**를 눌렀을 때 NSIS로 교체합니다. 개발 모드에서는 업데이트 서버를 호출하지 않습니다.
 
@@ -82,7 +83,7 @@ Get-AuthenticodeSignature '.\ScreenDescriptionScriptMaker-X.Y.Z-Setup.exe' | For
 ## 의존성 관리
 
 - `package-lock.json`을 항상 커밋합니다.
-- Dependabot PR은 CI 통과 후 한 번에 하나씩 병합합니다.
+- Dependabot의 정기 버전 PR은 사용하지 않습니다. GitHub 보안 경고와 `npm audit` 결과를 확인한 뒤 필요한 업데이트를 로컬에서 적용하고 전체 검증 후 `main`에 직접 푸시합니다.
 - Electron 보안 업데이트는 우선 처리합니다.
 - FFmpeg·yt-dlp 변경 시 로컬 파일과 유튜브 링크를 모두 다시 검증합니다.
 - sherpa-onnx·Pyannote·3D-Speaker 변경 시 고정 크기·SHA-256, 제3자 고지, 공식 4화자 샘플 검출을 다시 검증합니다.

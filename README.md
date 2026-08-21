@@ -63,11 +63,14 @@ npm run dist:win
 
 - 이 폴더가 유일한 개발 원본입니다: `C:\GiNuNi\screen-description-script-maker`
 - `main`은 항상 빌드 가능한 상태로 유지합니다.
-- 기능은 `feature/...` 브랜치에서 개발하고 검증 후 병합합니다.
+- 관리자와 AI 에이전트의 일상적인 수정은 로컬에서 `npm run verify`를 통과한 뒤 `main`에 직접 푸시합니다.
+- PR은 자동 생성 코드의 형식적인 승인 수단으로 사용하지 않습니다. 외부 기여자와 사람이 코드·맥락을 읽고 토론해야 할 때만 예외적으로 사용합니다.
+- 스크린샷은 사람이 UI 결과를 판단해야 할 때만 첨부하며, 자동 검증을 사람의 코드 리뷰처럼 표현하지 않습니다.
+- GitHub Actions의 `Code verification`은 직접 푸시 또는 사람이 요청한 PR의 회귀 오류를 찾는 기계 검사이며, 인간 리뷰나 승인을 대신한다고 주장하지 않습니다.
 - 릴리스는 SemVer 태그(`v0.1.0-beta.1`, `v1.0.0`)와 `CHANGELOG.md`로 기록합니다.
 - 원격 저장소는 `https://github.com/buildergarlic/ginuni.git`입니다.
 - `v*` 태그를 푸시하면 GitHub Actions가 설치본, `latest.yml`, 블록맵, SHA-256을 Releases에 게시하며 설치형 앱이 이를 자동 확인합니다.
-- 앱 구조는 [아키텍처 문서](docs/ARCHITECTURE.md), 배포 절차는 [릴리스 문서](docs/RELEASE.md)에 고정합니다.
+- 자세한 운영 원칙은 [개발 운영 정책](docs/DEVELOPMENT_POLICY.md), 앱 구조는 [아키텍처 문서](docs/ARCHITECTURE.md), 배포 절차는 [릴리스 문서](docs/RELEASE.md)에 고정합니다.
 
 ## 개인정보와 저작권
 

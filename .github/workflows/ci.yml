@@ -1,9 +1,17 @@
-name: CI
+name: Code verification
 
 on:
   push:
-    branches: [main, "feature/**", "fix/**", "agent/**"]
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-verification-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verify:
