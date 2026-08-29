@@ -40,6 +40,13 @@ AI 결과는 검수 가능한 초안입니다. 중요한 납품 전에는 반드
 
 자세한 설명은 [사용자 안내서](docs/USER_GUIDE.md)를 참고하세요.
 
+## 다음 업그레이드 계획
+
+- [화면해설작가 중심 업그레이드 설계](docs/superpowers/specs/2026-08-29-writer-first-upgrade-design.md)
+- [12주 개발 로드맵과 구현 계획](docs/superpowers/plans/2026-08-29-writer-first-upgrade.md)
+
+두 문서는 OSSAI 멘토 피드백을 현재 구조에 대조해 정리한 공식 계획입니다. 모델 교체보다 화면해설작가의 쉬운 작업 흐름, 안전한 검수, 객관적 품질 평가를 우선합니다.
+
 ## 개발
 
 ```powershell
