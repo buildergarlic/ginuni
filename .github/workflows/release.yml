@@ -51,6 +51,8 @@ jobs:
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      - name: Verify packaged GiNuNi icons
+        run: node scripts/qa-packaged-branding.mjs
       - name: Verify Authenticode signatures
         if: steps.signing.outputs.enabled == 'true'
         shell: pwsh

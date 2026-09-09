@@ -486,6 +486,7 @@ async function createWindow(): Promise<void> {
     }
   })
 
+  mainWindow.setIcon(join(app.isPackaged ? process.resourcesPath : join(__dirname, '../../resources'), 'branding', process.platform === 'win32' ? 'ginuni-app.ico' : 'ginuni-icon.png'))
   mainWindow.on('ready-to-show', () => mainWindow?.show())
   mainWindow.on('close', (event) => {
     if (allowWindowClose) return

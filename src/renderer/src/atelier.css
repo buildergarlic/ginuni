@@ -26,8 +26,10 @@ button:focus-visible, summary:focus-visible, a:focus-visible, input:focus-visibl
 .eyebrow { font-weight: 500; font-size: 12px; letter-spacing: 1.1px; }
 .app-shell { grid-template-columns: 208px minmax(0, 1fr); }
 .sidebar { background: #fff; color: var(--ink); border-right: 1px solid var(--line); }
-.brand { padding: 0 10px 32px; }
-.brand strong { color: var(--green); font-size: 25px; font-weight: 700; }
+.brand { padding: 0 0 26px; }
+.brand > div { min-width: 0; width: 100%; }
+.brand-logo { display: block; width: 100%; height: auto; object-fit: contain; background: #fff; }
+.about-brand-logo { max-width: 420px; margin-bottom: 24px; }
 .brand span { color: var(--muted); font-size: 14px; margin-top: 9px; }
 .sidebar nav button { color: var(--muted); font-size: 15px; font-weight: 500; display: flex; align-items: center; gap: 8px; padding: 12px; border-radius: 7px; }
 .sidebar nav button.active, .sidebar nav button:hover { background: #edf6f3; color: var(--green); }

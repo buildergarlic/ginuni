@@ -1,6 +1,6 @@
 {
   "name": "screen-description-script-maker",
-  "version": "0.6.0-beta.2",
+  "version": "0.6.0-beta.3",
   "description": "영상 음성과 화자를 분석해 화면해설 작업용 HWPX 대본을 만드는 Windows 데스크톱 앱",
   "main": "out/main/index.js",
   "author": "BuilderGarlic",
@@ -88,15 +88,26 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "resources/branding",
+        "to": "branding",
+        "filter": [
+          "*.ico",
+          "*.png"
+        ]
       }
     ],
     "win": {
+      "icon": "resources/branding/ginuni-app.ico",
       "target": [
         "nsis"
       ],
       "artifactName": "ScreenDescriptionScriptMaker-${version}-Setup.${ext}"
     },
     "nsis": {
+      "installerIcon": "resources/branding/ginuni-app.ico",
+      "uninstallerIcon": "resources/branding/ginuni-app.ico",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,

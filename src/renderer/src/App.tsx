@@ -7,6 +7,7 @@ import { Add20Regular, ArrowLeft20Regular, ArrowRight20Regular, ArrowUndo20Regul
 import { WorkflowPanel } from './WorkflowPanel'
 import { nextUnreviewedRow, scrollTopToRevealRow } from './review-navigation'
 import { GuideScreen } from './GuideScreen'
+import ginuniLogo from './assets/branding/ginuni-logo.png'
 import { inspectInlineDraft, prepareEditedRows, savePendingEdits, scheduleDraftSave } from './workflow-editing'
 import { createYouTubeSeekController, youtubeApiMessage } from './youtube-seek'
 import { supportsSpeakerLabels as projectSupportsSpeakerLabels } from '@shared/speaker-labels'
@@ -752,6 +753,7 @@ function AboutScreen({ bootstrap, updateStatus, onBack, onSupport, onCheckUpdate
     <main className="info-page">
       <button className="back-button" onClick={onBack}><ArrowLeft20Regular aria-hidden="true" />돌아가기</button>
       <div className="info-card">
+        <img className="brand-logo about-brand-logo" src={ginuniLogo} width={2172} height={724} alt="기누니 GiNuNi" />
         <span className="eyebrow">ABOUT</span>
         <h1>화면해설 대본 도구</h1>
         <p className="info-lead">영상의 대사와 타임코드를 초안으로 정리해, 화면해설작가가 본업인 화면해설에 집중하도록 돕는 Windows 앱입니다.</p>
@@ -1972,7 +1974,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><div><strong>GiNuNi</strong><span>화면해설 대본 도구</span></div></div>
+        <div className="brand"><div><img className="brand-logo" src={ginuniLogo} width={2172} height={724} alt="기누니 GiNuNi" /><span>화면해설 대본 도구</span></div></div>
         <nav>
           <button className="active">프로젝트</button>
           <button onClick={() => openAuxiliary('settings')}>설정</button>
