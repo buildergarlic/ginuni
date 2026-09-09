@@ -33,7 +33,6 @@ export function WorkflowPanel({ project, rows, selected, busy, mutate, action, c
   const [correction, setCorrection] = useState(Boolean(project.workflow?.consent.cloudCorrectionConsentAt))
   const issues = getReviewIssues({ ...project, rows })
   const remaining = rows.filter((row) => rowReviewStatus(row) !== 'approved')
-  const next = remaining.find((row) => rows.indexOf(row) > rows.findIndex((entry) => entry.id === selected?.id)) ?? remaining[0]
   const sources = [...new Map([...project.runs.flatMap((run) => run.sourceSegments ?? []), ...project.segments].map((segment) => [segment.id, segment])).values()].filter((segment) => selected?.sourceSegmentIds.includes(segment.id))
   const proposals = project.workflow?.proposals.filter((proposal) => proposal.rowId === selected?.id) ?? []
   return <section className="workflow-panel" aria-label="대본 확인과 기록">
@@ -41,11 +40,9 @@ export function WorkflowPanel({ project, rows, selected, busy, mutate, action, c
     <p>영상을 들으며 대사를 확인하고, 화면해설은 직접 작성하세요. 자동 검사는 정확도를 보증하지 않습니다.</p>
     <fieldset disabled={busy}>
       <div className="workflow-buttons">
-        <button className="secondary-button" disabled={!next} onClick={() => next && choose(next)}>다음 확인할 행</button>
-        <button className="primary-button" disabled={!selected || rowReviewStatus(selected) === 'approved'} onClick={() => selected && void mutate((revision) => window.screenScript.reviewRows(project.id, [selected.id], true, revision))}>선택한 행 확인 완료</button>
         <button className="secondary-button" disabled={!selected || rowReviewStatus(selected) !== 'approved'} onClick={() => selected && void mutate((revision) => window.screenScript.reviewRows(project.id, [selected.id], false, revision))}>확인 완료 취소</button>
       </div>
-      <p>수정하면 확인 완료가 해제됩니다.</p>
+      <p>대본 아래의 ‘확인 완료 · 다음’으로 확인을 기록합니다. 수정하면 확인 완료가 해제됩니다.</p>
       {issues.length > 0 && <details><summary>자동 점검 알림 {issues.length}개</summary><ul className="workflow-issues">{issues.map((issue) => <li key={issue.id}><span>{issue.severity === 'error' ? '오류' : '주의'}: {issue.message}</span>{issue.rowId && <button onClick={() => { const row = rows.find((entry) => entry.id === issue.rowId); if (row) choose(row) }}>해당 행으로 이동</button>}</li>)}</ul></details>}
       <details><summary>선택한 행의 원래 음성 인식 결과</summary>
         <p>원래 인식 결과도 틀릴 수 있습니다. 시간을 누르면 영상에서 확인합니다.</p>

@@ -21,6 +21,7 @@
     "verify": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
+    "@fluentui/react-icons": "2.0.339",
     "@xmldom/xmldom": "^0.9.11",
     "electron-updater": "6.8.9",
     "openai": "^7.4.0",

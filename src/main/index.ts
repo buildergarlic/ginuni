@@ -472,12 +472,12 @@ async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 960,
-    minWidth: 1100,
-    minHeight: 720,
+    minWidth: 800,
+    minHeight: 600,
     useContentSize: true,
     autoHideMenuBar: true,
     show: false,
-    backgroundColor: '#f6f4ef',
+    backgroundColor: '#fafbf9',
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,

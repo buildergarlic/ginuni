@@ -5,9 +5,43 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { DOMParser } from '@xmldom/xmldom'
 import { WorkflowPanel } from '../src/renderer/src/WorkflowPanel'
-import { initialReviewFontSize } from '../src/renderer/src/App'
+import { initialReviewFontSize, ReviewScreen } from '../src/renderer/src/App'
 
 const row: ScriptRow = { id: 'one', kind: 'dialogue', startMs: 0, endMs: 1000, content: '원문', speakers: [], sourceSegmentIds: ['s1'], reviewed: true, reviewStatus: 'approved', approvedAt: 'today' }
+
+function reviewMarkup(rows: ScriptRow[], processing = false) {
+  const project: ScriptProject = { schemaVersion: 1, id: 'p', title: '작품', createdAt: 'now', updatedAt: 'now', status: 'review', localDiarization: { mode: 'none', speakerCount: null }, source: { kind: 'local', uri: 'local.mp4', displayName: 'local' }, media: { durationMs: 1000 }, segments: [], rows, runs: [], exports: [], workflow: { version: 1, revision: 0, consent: {}, proposals: [], events: [] } }
+  const noop = () => {}
+  const markup = renderToStaticMarkup(createElement(ReviewScreen, { project, processing, onProject: noop, onBack: noop, onSettings: noop, onAbout: noop, onSupport: noop, onRetry: noop, onRepairModel: noop, notify: noop, closeSaveRef: { current: null } }))
+  return new DOMParser().parseFromString(markup, 'text/html')
+}
+
+describe('writer workspace accessible output', () => {
+  it('keeps confirmation disabled for an approved selection and reports completion', () => {
+    const document = reviewMarkup([row])
+    const button = Array.from(document.getElementsByTagName('button')).find((entry) => entry.textContent?.includes('확인 완료 · 다음'))
+    expect(button).toBeDefined()
+    expect(button?.hasAttribute('disabled')).toBe(true)
+    expect(document.documentElement?.textContent).toContain('모든 행을 확인했어요')
+  })
+  it('enables confirmation only for a remaining row when editing is unlocked', () => {
+    for (const processing of [false, true]) {
+      const document = reviewMarkup([{ ...row, reviewed: false, reviewStatus: 'unreviewed', approvedAt: undefined }], processing)
+      const button = Array.from(document.getElementsByTagName('button')).find((entry) => entry.textContent?.includes('확인 완료 · 다음'))
+      expect(button).toBeDefined()
+      expect(button?.hasAttribute('disabled')).toBe(processing)
+    }
+  })
+  it('keeps tools mounted in a labelled closed dialog and describes both export formats', () => {
+    const document = reviewMarkup([])
+    const dialog = document.getElementsByTagName('dialog')[0]
+    expect(dialog?.getAttribute('aria-labelledby')).toBe('work-tools-title')
+    expect(dialog?.hasAttribute('open')).toBe(false)
+    expect(dialog?.textContent).toContain('동의 설정 저장')
+    expect(document.documentElement?.textContent).toContain('한글 문서 · 대사와 화면해설')
+    expect(document.documentElement?.textContent).toContain('자막 파일 · 대사만')
+  })
+})
 
 describe('writer edits', () => {
   it('uses a readable new-profile font while preserving a saved writer preference', () => {

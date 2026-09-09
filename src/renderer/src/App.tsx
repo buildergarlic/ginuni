@@ -3,7 +3,9 @@ import { DESCRIPTION_TEXT } from '@shared/constants'
 import { formatTimecode } from '@shared/timecode'
 import { validateRows } from '@shared/rows'
 import { rowReviewStatus } from '@shared/workflow'
+import { Add20Regular, ArrowLeft20Regular, ArrowRight20Regular, ArrowUndo20Regular, ArrowExportUp20Regular, CheckmarkCircle20Regular, ChevronDown20Regular, ChevronRight20Regular, Dismiss20Regular, Document20Regular, Folder20Regular, Heart20Regular, Info20Regular, Play20Regular, Settings20Regular, Subtract20Regular, Video20Regular } from '@fluentui/react-icons'
 import { WorkflowPanel } from './WorkflowPanel'
+import { nextUnreviewedRow } from './review-navigation'
 import { GuideScreen } from './GuideScreen'
 import { inspectInlineDraft, prepareEditedRows, savePendingEdits, scheduleDraftSave } from './workflow-editing'
 import { createYouTubeSeekController, youtubeApiMessage } from './youtube-seek'
@@ -586,7 +588,7 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
       <input className="text-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="비워두면 영상 제목을 사용합니다" />
       {tab === 'local' ? (
         <button className={`drop-zone ${localPath ? 'selected' : ''}`} onClick={chooseFile}>
-          <span className="drop-icon">＋</span>
+          <span className="drop-icon"><Folder20Regular aria-hidden="true" /></span>
           <strong>{localPath ? localPath.split(/[\\/]/).pop() : '동영상 또는 음성 파일 선택'}</strong>
           <small>{localPath || 'MP4, MKV, MOV, WEBM, MP3, WAV 등'}</small>
         </button>
@@ -653,7 +655,7 @@ function SettingsScreen({ bootstrap, onChanged, onBack }: {
 
   return (
     <main className="settings-page">
-      <button className="back-button" onClick={onBack}>← 돌아가기</button>
+      <button className="back-button" onClick={onBack}><ArrowLeft20Regular aria-hidden="true" />돌아가기</button>
       <div className="settings-card">
         <span className="eyebrow">SETTINGS</span>
         <h1>설정</h1>
@@ -748,7 +750,7 @@ function AboutScreen({ bootstrap, updateStatus, onBack, onSupport, onCheckUpdate
   const checking = ['checking', 'available', 'downloading'].includes(updateStatus.state)
   return (
     <main className="info-page">
-      <button className="back-button" onClick={onBack}>← 돌아가기</button>
+      <button className="back-button" onClick={onBack}><ArrowLeft20Regular aria-hidden="true" />돌아가기</button>
       <div className="info-card">
         <span className="eyebrow">ABOUT</span>
         <h1>화면해설 대본 도구</h1>
@@ -806,7 +808,7 @@ function SupportScreen({ bootstrap, onBack, onAbout }: {
 }) {
   return (
     <main className="info-page support-page">
-      <button className="back-button" onClick={onBack}>← 돌아가기</button>
+      <button className="back-button" onClick={onBack}><ArrowLeft20Regular aria-hidden="true" />돌아가기</button>
       <div className="info-card support-card">
         <span className="eyebrow">SUPPORT THE DEVELOPER</span>
         <h1>개발자 후원</h1>
@@ -815,7 +817,7 @@ function SupportScreen({ bootstrap, onBack, onAbout }: {
           <span>GITHUB SPONSORS</span>
           <h2>GiNuNi 개발을 후원해 주세요</h2>
           <p>GitHub Sponsors에서 원하는 후원 단계를 선택할 수 있습니다. 지속적인 후원은 음성인식 품질 개선과 안정적인 Windows 배포에 큰 도움이 됩니다.</p>
-          <button className="sponsor-button" onClick={() => void window.screenScript.openExternal('sponsor')}>♥ GitHub Sponsors에서 후원하기</button>
+          <button className="sponsor-button" onClick={() => void window.screenScript.openExternal('sponsor')}><Heart20Regular aria-hidden="true" />GitHub Sponsors에서 후원하기</button>
         </div>
         <div className="support-note">
           <strong>비금전 후원도 큰 힘이 됩니다.</strong>
@@ -845,7 +847,7 @@ type RowContextMenuState = {
   y: number
 }
 
-function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAbout, onSupport, onRetry, onRepairModel, notify, closeSaveRef }: {
+export function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAbout, onSupport, onRetry, onRepairModel, notify, closeSaveRef }: {
   project: ScriptProject
   processing: boolean
   onProject: (value: ScriptProject) => void
@@ -877,6 +879,13 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
   const [inlineDraft, setInlineDraft] = useState<InlineRowDraft | null>(null)
   const [inlineErrors, setInlineErrors] = useState<{ start?: string; end?: string; content?: string }>({})
   const [contextMenu, setContextMenu] = useState<RowContextMenuState | null>(null)
+  const toolsDialogRef = useRef<HTMLDialogElement>(null)
+  const toolsOpenerRef = useRef<HTMLElement | null>(null)
+  const exportDisclosureRef = useRef<HTMLDetailsElement>(null)
+  const openTools = (event: ReactMouseEvent<HTMLButtonElement>): void => {
+    toolsOpenerRef.current = event.currentTarget
+    toolsDialogRef.current?.showModal()
+  }
   const mediaRef = useRef<MediaHandle>(null)
   const inlineContentRef = useRef<HTMLTextAreaElement | null>(null)
   const rowsRef = useRef(project.rows)
@@ -900,6 +909,10 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
   const pendingDraft = Boolean(draftInspection?.pending)
   const visibleRows = pendingDraft && draftRow ? rows.map((row) => row.id === draftRow.id ? { ...row, reviewed: false, reviewStatus: 'unreviewed' as const, approvedAt: undefined } : row) : rows
   const visibleSelected = visibleRows.find((row) => row.id === selectedId)
+  const remainingCount = visibleRows.filter((row) => rowReviewStatus(row) !== 'approved').length
+  const nextReviewRow = nextUnreviewedRow(visibleRows, selectedId)
+  const invalidDraft = Boolean(draftInspection && !draftInspection.patch)
+  const confirmDisabled = editingBlocked || invalidDraft || !visibleSelected || rowReviewStatus(visibleSelected) === 'approved'
   const latestRun = project.runs.at(-1)
   const supportsSpeakerLabels = projectSupportsSpeakerLabels(project)
   const reviewFontStyle = useMemo(() => ({
@@ -992,11 +1005,18 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
     const closeMenu = (): void => setContextMenu(null)
     const onMouseDown = (event: MouseEvent): void => {
       const target = event.target as Element | null
+      if (!target?.closest('.export-disclosure') && exportDisclosureRef.current) exportDisclosureRef.current.open = false
       if (target?.closest('.row-context-menu')) return
       closeMenu()
     }
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') closeMenu()
+      if (event.key === 'Escape') {
+        closeMenu()
+        if (exportDisclosureRef.current?.open) {
+          exportDisclosureRef.current.open = false
+          exportDisclosureRef.current.querySelector('summary')?.focus()
+        }
+      }
     }
 
     window.addEventListener('mousedown', onMouseDown)
@@ -1057,7 +1077,9 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
   }, [inlineDraft?.content, inlineDraft?.rowId, selectedId, resizeInlineContentEditor, reviewFontSize])
   const selectRow = (row: ScriptRow): void => {
     setSelectedId(row.id)
-    setInlineDraft(loadDraftFromRow(row))
+    const draft = loadDraftFromRow(row)
+    inlineDraftRef.current = draft
+    setInlineDraft(draft)
     setInlineErrors({})
     mediaRef.current?.seek(row.startMs / 1000)
     requestAnimationFrame(() => {
@@ -1128,21 +1150,31 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
     } catch (cause) { notify(errorMessage(cause)) }
     finally { mutationRef.current = false; setMutating(false) }
   }
-  const mutateProject = async (operation: (revision: number) => Promise<ScriptProject>): Promise<void> => {
+  const mutateProject = async (operation: (revision: number) => Promise<ScriptProject>, resolveSelection?: (updated: ScriptProject) => ScriptRow | undefined): Promise<void> => {
     await runAction(async () => {
       const updated = await operation(revisionRef.current)
       revisionRef.current = updated.workflow?.revision ?? 0
       rowsRef.current = updated.rows
       setRows(updated.rows)
-      const selection = updated.rows.find((row) => row.id === selectedId) ?? updated.rows[0]
+      const selection = resolveSelection?.(updated) ?? updated.rows.find((row) => row.id === selectedId) ?? updated.rows[0]
       setSelectedId(selection?.id ?? '')
       const draft = loadDraftFromRow(selection)
       inlineDraftRef.current = draft
       setInlineDraft(draft)
+      setInlineErrors({})
+      if (resolveSelection && selection) mediaRef.current?.seek(selection.startMs / 1000)
       setHistory([])
       setDirty(false)
       onProject(updated)
     })
+  }
+  const confirmAndNext = (): void => {
+    if (confirmDisabled) return
+    const targetId = selectedId
+    void mutateProject(
+      (revision) => window.screenScript.reviewRows(project.id, [targetId], true, revision),
+      (updated) => nextUnreviewedRow(updated.rows, targetId) ?? updated.rows.find((row) => row.id === targetId)
+    )
   }
   const undo = (): void => {
     if (mutationRef.current || processing) return
@@ -1433,46 +1465,49 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
     <div className="review-page" aria-busy={editingBlocked}>
       {editingBlocked && <div className="editor-busy" role="status">{processing ? '음성 분석 중입니다. 편집은 완료 후 계속할 수 있습니다.' : '저장 후 요청을 처리하고 있습니다…'}</div>}
       <header className="review-header">
-        <div className="review-title"><button className="icon-button" onClick={() => leaveReview(onBack)}>←</button><div><span>검수 프로젝트</span><h1>{project.title}</h1></div></div>
+        <div className="review-title">
+          <button className="back-button" onClick={() => leaveReview(onBack)}><ArrowLeft20Regular aria-hidden="true" />내 프로젝트</button>
+          <h1>{project.title}</h1>
+          <span className="autosave" role="status"><CheckmarkCircle20Regular aria-hidden="true" />{pendingDraft ? (draftInspection?.patch ? '입력 중 · 저장 대기' : '시간 입력 확인 · 저장 대기') : saving ? '저장 중…' : dirty ? '수정됨 · 저장 대기' : '자동 저장됨'}</span>
+        </div>
         <div className="review-actions">
-          <button className="header-link" onClick={() => leaveReview(onAbout)}>About GiNuNi</button>
-          <button className="header-link sponsor-link" onClick={() => leaveReview(onSupport)}>♥ 개발자 후원</button>
-          <button className="header-link" onClick={() => leaveReview(onSettings)}>설정</button>
-          <span className="autosave" role="status">{pendingDraft ? (draftInspection?.patch ? '입력 중 · 저장 대기' : '시간 입력 확인 · 저장 대기') : saving ? '저장 중…' : dirty ? '수정됨' : '자동 저장됨'}</span>
-          <button className="secondary-button" disabled={editingBlocked || !history.length} onClick={undo}>실행 취소</button>
-          <button className="secondary-button" disabled={editingBlocked || errors.length > 0 || rows.length === 0} onClick={exportSubtitle}>SRT 내보내기</button>
-          <button className="primary-button" disabled={editingBlocked || errors.length > 0 || rows.length === 0} onClick={exportDocument}>HWPX 내보내기</button>
+          <button className="header-link" onClick={openTools} aria-haspopup="dialog"><Settings20Regular aria-hidden="true" />작업 도구</button>
+          <details className="export-disclosure" ref={exportDisclosureRef}>
+            <summary className="secondary-button"><ArrowExportUp20Regular aria-hidden="true" />대본 내보내기<ChevronDown20Regular aria-hidden="true" /></summary>
+            <div className="export-options" aria-label="대본 파일 형식">
+              <button disabled={editingBlocked || invalidDraft || errors.length > 0 || rows.length === 0} onClick={() => { if (exportDisclosureRef.current) exportDisclosureRef.current.open = false; void exportDocument() }}><Document20Regular aria-hidden="true" /><span><strong>HWPX 내보내기</strong><small>한글 문서 · 대사와 화면해설</small></span></button>
+              <button disabled={editingBlocked || invalidDraft || errors.length > 0 || rows.length === 0} onClick={() => { if (exportDisclosureRef.current) exportDisclosureRef.current.open = false; void exportSubtitle() }}><Document20Regular aria-hidden="true" /><span><strong>SRT 내보내기</strong><small>자막 파일 · 대사만</small></span></button>
+            </div>
+          </details>
         </div>
       </header>
 
-      <fieldset className="review-lock" disabled={editingBlocked}><div className="review-grid">
+      <fieldset className="review-lock"><div className="review-grid">
         <aside className="media-panel">
           <MediaPlayer ref={mediaRef} project={project} onTime={setPlayhead} onError={setMediaError} onReady={() => setMediaError('')} />
           {mediaError && <p className="media-error">{mediaError}</p>}
           {project.source.kind === 'youtube' && mediaError && (
             <button className="secondary-button" onClick={openCurrentYoutubeInBrowser}>브라우저에서 직접 열기</button>
           )}
-          <div className="playhead-card"><span>현재 재생 위치</span><strong>{formatTimecode(playhead * 1000)}</strong></div>
-                <div className="review-font-control" aria-label="검수 편집 창 글자 크기 조절">
-                  <span>글자 크기</span>
-                  <button onClick={() => void setReviewFontSize(reviewFontSize - 1)} disabled={reviewFontSize <= REVIEW_FONT_SIZE_MIN}>−</button>
-                  <input
-                    type="range"
-                    min={REVIEW_FONT_SIZE_MIN}
-                    max={REVIEW_FONT_SIZE_MAX}
-                    value={reviewFontSize}
-                    onChange={(event) => setReviewFontSize(event.target.valueAsNumber)}
-                    aria-label="검수 창 글자 크기"
-                    className="review-font-slider"
-                  />
-                  <button onClick={() => void setReviewFontSize(reviewFontSize + 1)} disabled={reviewFontSize >= REVIEW_FONT_SIZE_MAX}>＋</button>
-                  <span className="review-font-size-label">{reviewFontSize}px</span>
-                </div>
+          <section className="writing-context" aria-label="영상과 선택 구간">
+            <div className="playhead-card"><span>현재 재생 위치</span><strong>{formatTimecode(playhead * 1000)}{project.media.durationMs ? ` / ${formatTimecode(project.media.durationMs)}` : ''}</strong></div>
+            <h2>{selected ? `${formatTimecode(selected.startMs)} – ${formatTimecode(selected.endMs)} · ${Math.max(0, (selected.endMs - selected.startMs) / 1000)}초` : '영상을 보며 대본을 준비하세요'}</h2>
+            <p>대사를 들으며 해설을 작성하세요.</p>
+            <button className="source-records-button" onClick={openTools} aria-haspopup="dialog"><ChevronRight20Regular aria-hidden="true" />원문과 작업 기록</button>
+          </section>
+          <dialog className="work-tools-dialog" ref={toolsDialogRef} aria-labelledby="work-tools-title" onClose={() => toolsOpenerRef.current?.focus()}>
+            <header className="work-tools-heading"><div><h2 id="work-tools-title">작업 도구</h2><p>원문을 확인하고 대본과 작업 기록을 관리하세요.</p></div><button className="icon-button" aria-label="작업 도구 닫기" onClick={() => toolsDialogRef.current?.close()}><Dismiss20Regular aria-hidden="true" /></button></header>
+            <nav className="work-tools-navigation" aria-label="앱 정보와 설정">
+              <button className="secondary-button" onClick={() => leaveReview(onSettings)}><Settings20Regular aria-hidden="true" />설정</button>
+              <button className="secondary-button" onClick={() => leaveReview(onAbout)}><Info20Regular aria-hidden="true" />About GiNuNi</button>
+              <button className="secondary-button" onClick={() => leaveReview(onSupport)}><Heart20Regular aria-hidden="true" />개발자 후원</button>
+            </nav>
+            <fieldset className="tools-edit-lock" disabled={editingBlocked}>
           <WorkflowPanel project={project} rows={visibleRows} selected={visibleSelected} busy={editingBlocked} mutate={mutateProject} action={runAction} choose={(row) => { chooseRow(row) }} seek={(seconds) => mediaRef.current?.seek(seconds)} />
             {selected && (
               <div className="edit-card">
                 <div className="edit-card-heading"><h3>선택한 행 편집</h3><span>{selected.kind === 'dialogue' ? '대사' : '해설'}</span></div>
-                <p className="help-text" style={{ margin: 0, marginBottom: 10, color: '#596563', fontSize: 12 }}>행 편집은 표에서 직접 수정하세요.</p>
+                <p className="help-text">시간과 내용은 대본 표에서도 직접 수정할 수 있습니다.</p>
               <label className="field-label">분류</label>
               <div className="segmented-control">
                 <button className={selected.kind === 'dialogue' ? 'active' : ''} onClick={() => updateRow(selected.id, {
@@ -1500,10 +1535,12 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
           {supportsSpeakerLabels && (
             <div className="edit-card">
               <h3>화자 전체 이름 변경</h3>
-              <div className="speaker-rename"><input value={speakerFrom} onChange={(event) => setSpeakerFrom(event.target.value)} placeholder="화자1" /><span>→</span><input value={speakerTo} onChange={(event) => setSpeakerTo(event.target.value)} placeholder="선생님" /></div>
+              <div className="speaker-rename"><input aria-label="변경할 화자 이름" value={speakerFrom} onChange={(event) => setSpeakerFrom(event.target.value)} placeholder="화자1" /><ArrowRight20Regular aria-hidden="true" /><input aria-label="새 화자 이름" value={speakerTo} onChange={(event) => setSpeakerTo(event.target.value)} placeholder="선생님" /></div>
               <button className="secondary-button wide" onClick={renameSpeaker}>모든 행에 적용</button>
             </div>
           )}
+            </fieldset>
+          </dialog>
         </aside>
 
         <main className="script-panel">
@@ -1550,7 +1587,14 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
             </div>
           )}
           <div className="script-toolbar">
-            <div><h2>대본 검수</h2><p>{rows.length}개 행 · 행을 누르면 해당 시점으로 이동합니다.</p></div>
+            <div><h2>대본 쓰기</h2><p>{rows.length ? remainingCount ? `확인할 구간 ${remainingCount}개` : '모든 행을 확인했어요' : '아직 작성할 대본이 없습니다'}</p></div>
+            <div className="review-font-control" aria-label="검수 편집 창 글자 크기 조절">
+              <span>글자 크기</span>
+              <button aria-label="글자 크기 줄이기" onClick={() => setReviewFontSize(reviewFontSize - 1)} disabled={reviewFontSize <= REVIEW_FONT_SIZE_MIN}><Subtract20Regular aria-hidden="true" /></button>
+              <span className="review-font-size-label">{reviewFontSize}px</span>
+              <button aria-label="글자 크기 키우기" onClick={() => setReviewFontSize(reviewFontSize + 1)} disabled={reviewFontSize >= REVIEW_FONT_SIZE_MAX}><Add20Regular aria-hidden="true" /></button>
+              <input type="range" min={REVIEW_FONT_SIZE_MIN} max={REVIEW_FONT_SIZE_MAX} value={reviewFontSize} onChange={(event) => setReviewFontSize(event.target.valueAsNumber)} aria-label="검수 창 글자 크기" className="review-font-slider" />
+            </div>
             {timeIssues.length > 0 && <span className="validation-pill">{formatTimeIssueSummary(timeIssues.length)}</span>}
           </div>
           {timeIssues.length > 0 && (
@@ -1573,7 +1617,7 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
           )}
           <div className="table-wrap">
             <table className="script-table">
-              <thead><tr><th>분류</th><th>시작</th><th>종료</th><th>간격</th><th>화자/내용</th><th>검수</th></tr></thead>
+              <thead><tr><th>시작 – 종료</th><th>분류</th><th>대사 / 화면해설</th><th>검수 상태</th></tr></thead>
               <tbody>
                 {rows.map((row) => (
                   (() => {
@@ -1589,10 +1633,10 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
                         onClick={(event) => { if (!(event.target as Element).closest('input, button')) chooseRow(row) }}
                         onContextMenu={(event) => openContextMenu(event, row.id)}
                       >
-                        <td><span className={`kind-badge ${row.kind}`}>{row.kind === 'dialogue' ? '대사' : '해설'}</span></td>
-                        <td>
+                        <td className="row-time-cell"><div className="row-time-range">
                           {isEditing ? (
                             <input
+                              disabled={editingBlocked}
                               aria-label="선택한 행 시작 시간"
                               className={`inline-time-input ${inlineErrors.start && isEditing ? 'inline-field-error' : ''}`}
                               value={draft?.start ?? formatTimecode(row.startMs)}
@@ -1611,10 +1655,10 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
                             formatTimecode(row.startMs)
                           )}
                           {inlineErrors.start && isEditing && <small className="inline-error-hint">{inlineErrors.start}</small>}
-                        </td>
-                        <td>
+                          <span className="time-separator" aria-hidden="true">–</span>
                           {isEditing ? (
                             <input
+                              disabled={editingBlocked}
                               aria-label="선택한 행 종료 시간"
                               className={`inline-time-input ${inlineErrors.end && isEditing ? 'inline-field-error' : ''}`}
                               value={draft?.end ?? formatTimecode(row.endMs)}
@@ -1633,11 +1677,13 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
                             formatTimecode(row.endMs)
                           )}
                           {inlineErrors.end && isEditing && <small className="inline-error-hint">{inlineErrors.end}</small>}
+                          </div><small className="row-duration">{Math.max(0, (row.endMs - row.startMs) / 1000)}초</small>
                         </td>
-                        <td>{Math.max(0, Math.round((row.endMs - row.startMs) / 1000))}</td>
+                        <td><span className={`kind-badge ${row.kind}`}>{row.kind === 'dialogue' ? '대사' : '화면해설'}</span></td>
                         <td className="content-cell" style={{ ...reviewFontStyle, minHeight: `${Math.max(72, Math.round(reviewFontSize * 4.8))}px` }}>
                           {isEditing ? (
                             <textarea
+                              disabled={editingBlocked}
                               aria-label="선택한 행 대본 내용"
                               className="inline-content-editor"
                               ref={inlineContentRef}
@@ -1656,7 +1702,7 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
                             <div className="content-display" style={reviewFontStyle}>{row.content}</div>
                           )}
                         </td>
-                        <td>{pendingDraft && draftRow?.id === row.id ? <span className="unreviewed-mark">수정 중 · 확인 전</span> : rowReviewStatus(row) === 'approved' ? <span className="reviewed-mark">✓ 확인 완료</span> : <span className="unreviewed-mark">{rowReviewStatus(row) === 'needsAttention' ? '! 주의 필요' : '확인 전'}</span>}</td>
+                        <td>{pendingDraft && draftRow?.id === row.id ? <span className="unreviewed-mark draft-mark">수정 중 · 확인 전</span> : rowReviewStatus(row) === 'approved' ? <span className="reviewed-mark">확인 완료</span> : <span className="unreviewed-mark">{rowReviewStatus(row) === 'needsAttention' ? '주의 필요' : '확인 전'}</span>}</td>
                       </tr>
                     )
                   })()
@@ -1674,8 +1720,16 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
                 <button className="row-context-item danger" onClick={() => void runDeleteOnContextRow()}>행 삭제</button>
               </div>
             )}
-            {rows.length === 0 && <div className="empty-table">아직 분석된 대본이 없습니다. 상단의 처리 시작 버튼으로 음성을 분석하세요.</div>}
+            {rows.length === 0 && <div className="empty-table">아직 분석된 대본이 없습니다. 음성 분석 시작 버튼으로 대사 초안을 준비하세요.</div>}
           </div>
+          <footer className="review-footer">
+            <p role="status"><Info20Regular aria-hidden="true" />{!rows.length ? '음성을 분석한 뒤 대본을 확인할 수 있어요.' : pendingDraft ? '수정한 내용을 다시 확인해야 해요.' : remainingCount === 0 ? '모든 행을 확인했어요. 대본을 내보낼 수 있어요.' : visibleSelected && rowReviewStatus(visibleSelected) === 'approved' ? '이 행은 확인했어요. 다음 구간으로 이동하세요.' : '영상을 듣고 이 행을 확인해 주세요.'}</p>
+            <div className="review-footer-actions">
+              <button className="secondary-button" disabled={editingBlocked || !history.length} onClick={undo}><ArrowUndo20Regular aria-hidden="true" />실행 취소</button>
+              <button className="next-review-button" disabled={editingBlocked || invalidDraft || !nextReviewRow} onClick={() => nextReviewRow && chooseRow(nextReviewRow)}>다음 확인할 행</button>
+              <button className="primary-button confirm-next" disabled={confirmDisabled} onClick={confirmAndNext}>확인 완료 · 다음<ChevronRight20Regular aria-hidden="true" /></button>
+            </div>
+          </footer>
         </main>
       </div></fieldset>
     </div>
@@ -1740,8 +1794,8 @@ export default function App() {
     projectBusyRef.current = true
     try {
       await closeSaveRef.current?.()
-      if (!project.workflow?.consent.rightsConfirmedAt) throw new Error('왼쪽의 사용 권리와 외부 전송 설정에서 영상 사용 권리를 확인하고 저장하세요.')
-      if (projectPreset(project) === 'openai' && !project.workflow?.consent.cloudAudioConsentAt) throw new Error('왼쪽의 사용 권리와 외부 전송 설정에서 음성 외부 전송 동의를 저장하세요.')
+      if (!project.workflow?.consent.rightsConfirmedAt) throw new Error('작업 도구의 사용 권리와 외부 전송 설정에서 영상 사용 권리를 확인하고 저장하세요.')
+      if (projectPreset(project) === 'openai' && !project.workflow?.consent.cloudAudioConsentAt) throw new Error('작업 도구의 사용 권리와 외부 전송 설정에서 음성 외부 전송 동의를 저장하세요.')
       setProjectBusy(true)
       setProgress({ projectId: project.id, stage: 'preparing', percent: 1, message: '처리를 시작합니다.' })
       const processed = await window.screenScript.processProject(project.id)
@@ -1843,7 +1897,8 @@ export default function App() {
            closeSaveRef={closeSaveRef}
         />
         {project.status !== 'review' && project.status !== 'exported' && (
-          <>
+          <section className="processing-controls" aria-label="음성 분석 준비">
+            {(!project.workflow?.consent.rightsConfirmedAt || (projectPreset(project) === 'openai' && !project.workflow?.consent.cloudAudioConsentAt)) && <p className="processing-consent-note">분석 전 <strong>작업 도구 → 사용 권리와 외부 전송 설정</strong>에서 {!project.workflow?.consent.rightsConfirmedAt ? '영상 사용 권리' : '음성 외부 전송 동의'}를 확인하고 저장하세요.</p>}
             <details className="floating-analysis-options"><summary>고급 분석 옵션</summary>
             {projectPreset(project) === 'local-diarization' && (
               <select aria-label="화자 수" disabled={projectBusy} value={project.localDiarization.speakerCount ?? 'auto'} onChange={(event) => void changeSpeakerCount(event.target.value)}>
@@ -1858,9 +1913,8 @@ export default function App() {
             </select>
             </details>
             <button disabled={projectBusy} className="floating-process" onClick={startProcessing}>{projectPreset(project) === 'openai' ? 'OpenAI 음성 분석 시작' : projectPreset(project) === 'local-diarization' ? '로컬 화자 분석 시작' : '로컬 음성 분석 시작'}</button>
-          </>
+          </section>
         )}
-        <button className="floating-settings" onClick={() => openAuxiliary('settings')}>설정</button>
         {notice && <div className="toast">{notice}</div>}
         {progress && progress.percent < 100 && (
           <div className="processing-overlay"><div className="processing-card"><span className="eyebrow">VOICE PROCESSING</span><h2>{progress.message}</h2><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><p>{progress.percent}%</p><button className="secondary-button" onClick={() => window.screenScript.cancelProcessing(progress.projectId)}>취소</button></div></div>
@@ -1873,13 +1927,13 @@ export default function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><div className="brand-mark">해</div><div><strong>화면해설</strong><span>대본 도구</span></div></div>
+        <div className="brand"><div><strong>GiNuNi</strong><span>화면해설 대본 도구</span></div></div>
         <nav>
           <button className="active">프로젝트</button>
           <button onClick={() => openAuxiliary('settings')}>설정</button>
           <button onClick={() => openAuxiliary('guide')}>사용법</button>
           <button onClick={() => openAuxiliary('about')}>About GiNuNi</button>
-          <button className="nav-sponsor" onClick={() => openAuxiliary('support')}>♥ 개발자 후원</button>
+          <button className="nav-sponsor" onClick={() => openAuxiliary('support')}><Heart20Regular aria-hidden="true" />개발자 후원</button>
         </nav>
         <div className="sidebar-bottom"><span className="status-dot ok" />{bootstrap.localModel.installed ? '로컬 분석 준비됨' : 'API 없이 사용 가능'}<small>v{bootstrap.appVersion}</small></div>
       </aside>
@@ -1893,8 +1947,8 @@ export default function App() {
             <div className="recent-list">
               {bootstrap.projects.map((item) => (
                 <div className="recent-item" key={item.id}>
-                  <button className="recent-main" onClick={() => openProject(item.id)}><span className={`source-icon ${item.sourceKind}`}>{item.sourceKind === 'youtube' ? '▶' : '▣'}</span><span className="recent-copy"><strong>{item.title}</strong><small>{new Date(item.updatedAt).toLocaleString('ko-KR')} · {item.durationMs ? formatTimecode(item.durationMs) : '미분석'}</small></span><span className={`status-chip ${item.status}`}>{statusLabel(item.status)}</span></button>
-                  <button className="recent-delete" title="프로젝트 삭제" onClick={() => removeProject(item)}>×</button>
+                  <button className="recent-main" onClick={() => openProject(item.id)}><span className={`source-icon ${item.sourceKind}`}>{item.sourceKind === 'youtube' ? <Play20Regular aria-hidden="true" /> : <Video20Regular aria-hidden="true" />}</span><span className="recent-copy"><strong>{item.title}</strong><small>{new Date(item.updatedAt).toLocaleString('ko-KR')} · {item.durationMs ? formatTimecode(item.durationMs) : '미분석'}</small></span><span className={`status-chip ${item.status}`}>{statusLabel(item.status)}</span></button>
+                  <button className="recent-delete" title="프로젝트 삭제" aria-label={`${item.title} 프로젝트 삭제`} onClick={() => removeProject(item)}><Dismiss20Regular aria-hidden="true" /></button>
                 </div>
               ))}
               {bootstrap.projects.length === 0 && <div className="recent-empty"><strong>아직 프로젝트가 없습니다</strong><span>왼쪽에서 첫 프로젝트를 만들어 보세요.</span></div>}
