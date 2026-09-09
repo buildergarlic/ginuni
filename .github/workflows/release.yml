@@ -87,6 +87,7 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           prerelease: ${{ contains(github.ref_name, 'beta') }}
+          body_path: docs/release-notes-${{ github.ref_name }}.md
           files: |
             release/*.exe
             release/*.exe.blockmap

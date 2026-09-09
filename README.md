@@ -2,17 +2,18 @@
 
 영상 파일 또는 공개·일부공개 유튜브 링크에서 음성과 화자를 분석하고, 화면해설작가가 검수한 뒤 한컴오피스용 HWPX 대본으로 저장하는 Windows 앱입니다.
 
-## 최신 버전 다운로드
+## 파일럿 베타 다운로드
 
-[화면해설 대본 도구 v0.5.0-beta.7 설치 파일 내려받기](https://github.com/buildergarlic/ginuni/releases/download/v0.5.0-beta.7/ScreenDescriptionScriptMaker-0.5.0-beta.7-Setup.exe)
+[화면해설 대본 도구 v0.6.0-beta.1 설치 파일 내려받기](https://github.com/buildergarlic/ginuni/releases/download/v0.6.0-beta.1/ScreenDescriptionScriptMaker-0.6.0-beta.1-Setup.exe)
 
-- Windows 10/11 x64용 설치 파일이며 약 237MB입니다.
+- 위 링크는 `v0.6.0-beta.1` 태그의 GitHub Actions 릴리스가 성공한 뒤 사용할 수 있습니다. 게시 전에는 [GiNuNi Releases](https://github.com/buildergarlic/ginuni/releases)에서 기존 배포본을 이용하세요.
+- Windows 10/11 x64용 설치 파일입니다. 실제 파일 크기는 게시된 Releases 자산에서 확인하세요.
 - 새 버전과 체크섬은 [GiNuNi Releases](https://github.com/buildergarlic/ginuni/releases)에서 확인할 수 있습니다.
-- 현재 베타 설치본은 코드 서명 전이므로 Windows SmartScreen이 표시되면 게시자와 파일 출처를 확인한 뒤 실행하세요.
+- 현재 설정은 인증서가 없으면 무서명 베타 설치본을 게시합니다. 릴리스의 실제 서명 상태를 확인하고, 무서명이면 Windows SmartScreen이 표시될 수 있으므로 공식 Releases 출처와 SHA-256을 확인한 뒤 실행하세요.
 
 ## 현재 버전
 
-- 버전: `0.5.0-beta.7`
+- 릴리스 대상 버전: `0.6.0-beta.1` 파일럿 베타
 - 운영체제: Windows 10/11
 - 입력 길이: 최대 3시간
 - 기본 언어: 한국어
@@ -40,12 +41,15 @@ AI 결과는 검수 가능한 초안입니다. 중요한 납품 전에는 반드
 
 자세한 설명은 [사용자 안내서](docs/USER_GUIDE.md)를 참고하세요.
 
-## 다음 업그레이드 계획
+## v0.6 파일럿 베타
 
-검증 가능한 AI 워크플로우가 **개발 소스에 구현**되었습니다. 위의 기존 배포 설치 파일에는 아직 포함되지 않습니다.
+검증 가능한 AI 워크플로우와 오른쪽 대사·해설 클릭 시 해당 행 시작으로 영상을 이동하는 기능을 `v0.6.0-beta.1` 파일럿 대상으로 준비했습니다. 활성 편집창을 눌러도 작성 중인 초안을 유지하며, 일시 정지 중인 영상은 자동 재생하지 않습니다.
+
+이 파일럿 배포 승인은 실제 작가 사용성·실제 한국어 방송 자료 정확도·실제 OpenAI 연결·한컴오피스 긴 문서 검증을 통과했다는 뜻이 아닙니다. 중요한 납품에는 사용하지 말고 시험용 프로젝트와 백업본으로 먼저 확인하세요.
 
 - [구현 범위·작가 사용법·검증 방법](docs/VERIFIABLE_WORKFLOW.md)
 - [개발자용 정답 기반 오프라인 평가](docs/evaluation.md)
+- [v0.6.0-beta.1 파일럿 릴리스 안내](docs/release-notes-0.6.0-beta.1.md)
 
 - [화면해설작가 중심 업그레이드 설계](docs/superpowers/specs/2026-08-29-writer-first-upgrade-design.md)
 - [12주 개발 로드맵과 구현 계획](docs/superpowers/plans/2026-08-29-writer-first-upgrade.md)
