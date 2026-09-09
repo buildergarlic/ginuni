@@ -105,4 +105,3 @@ The diagram currently omits some important return paths. Restore them precisely:
 
 No new boxes. No content changes. No extra decorations. Correct arrow directions and no overlapping labels are the only purpose of this edit.
 ```
-
