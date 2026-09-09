@@ -1,0 +1,52 @@
+{
+  "datasetId": "synthetic-example-not-a-benchmark",
+  "version": "1.0.0",
+  "candidate": {
+    "provider": "synthetic-fixture",
+    "model": "handwritten-example-not-a-real-model",
+    "version": "1.0.0",
+    "configuration": { "generation": "manually authored synthetic strings" }
+  },
+  "separation": { "tuningGroupIds": [], "validationGroupIds": [] },
+  "split": "test",
+  "rightsConfirmed": true,
+  "referenceReviewed": true,
+  "normalization": {
+    "unicode": "NFC",
+    "trim": true,
+    "spaces": "collapse",
+    "cerWhitespace": "exclude",
+    "punctuation": "retain",
+    "werTokens": "whitespace"
+  },
+  "clips": [
+    {
+      "clipId": "synthetic-001",
+      "groupId": "fictional-program-a/fictional-speaker-a",
+      "reference": "서울역입니다.",
+      "hypothesis": "서울역입니다.",
+      "hotwords": ["서울역"],
+      "durationMs": 2000,
+      "processingMs": 500,
+      "reviewMs": 1000,
+      "cost": 0.01
+    },
+    {
+      "clipId": "synthetic-002",
+      "groupId": "fictional-program-b/fictional-speaker-b",
+      "reference": "안녕하세요.",
+      "hypothesis": "안녕하세요.",
+      "hotwords": ["안녕하세요"],
+      "durationMs": 3000,
+      "processingMs": 750,
+      "reviewMs": 1200,
+      "cost": 0.02
+    }
+  ],
+  "acceptance": {
+    "maxCer": 0.05,
+    "maxWer": 0.1,
+    "minHotwordRecall": 0.95,
+    "minHumanReviewedTestSamples": 2
+  }
+}

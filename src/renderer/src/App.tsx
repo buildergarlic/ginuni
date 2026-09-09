@@ -1,7 +1,10 @@
 import { type MouseEvent as ReactMouseEvent, forwardRef, type ReactElement, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { DESCRIPTION_TEXT } from '@shared/constants'
-import { formatTimecode, parseTimecode } from '@shared/timecode'
+import { formatTimecode } from '@shared/timecode'
 import { validateRows } from '@shared/rows'
+import { rowReviewStatus } from '@shared/workflow'
+import { WorkflowPanel } from './WorkflowPanel'
+import { inspectInlineDraft, prepareEditedRows, savePendingEdits, scheduleDraftSave } from './workflow-editing'
 import { supportsSpeakerLabels as projectSupportsSpeakerLabels } from '@shared/speaker-labels'
 import type {
   BootstrapData,
@@ -23,7 +26,7 @@ type YoutubeEmbedMode = 'nocookie' | 'youtube'
 const REVIEW_FONT_SIZE_KEY = 'ginuni-review-font-size'
 const REVIEW_FONT_SIZE_MIN = 11
 const REVIEW_FONT_SIZE_MAX = 28
-const REVIEW_FONT_SIZE_DEFAULT = 12
+const REVIEW_FONT_SIZE_DEFAULT = 16
 
 interface MediaHandle {
   seek(seconds: number): void
@@ -41,6 +44,10 @@ function statusLabel(status: ProjectSummary['status']): string {
 function normalizeReviewFontSize(value: number): number {
   const parsed = Number.isFinite(value) ? Math.round(value) : REVIEW_FONT_SIZE_DEFAULT
   return Math.min(REVIEW_FONT_SIZE_MAX, Math.max(REVIEW_FONT_SIZE_MIN, parsed))
+}
+
+export function initialReviewFontSize(saved: string | null): number {
+  return saved === null || saved.trim() === '' ? REVIEW_FONT_SIZE_DEFAULT : normalizeReviewFontSize(Number(saved))
 }
 
 function processingStageLabel(stage?: string): string {
@@ -532,6 +539,8 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
   const [title, setTitle] = useState('')
   const [preset, setPreset] = useState<AnalysisPreset>('local')
   const [speakerCount, setSpeakerCount] = useState('auto')
+  const [rightsConfirmed, setRightsConfirmed] = useState(false)
+  const [cloudAudioConsent, setCloudAudioConsent] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -548,6 +557,8 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
       localPath: tab === 'local' ? localPath : undefined,
       youtubeUrl: tab === 'youtube' ? youtubeUrl.trim() : undefined,
       transcriptionEngine: preset === 'openai' ? 'openai' : 'local',
+      rightsConfirmed,
+      cloudAudioConsent: preset === 'openai' && cloudAudioConsent,
       localDiarization: {
         mode: preset === 'local-diarization' ? 'sherpa-onnx' : 'none',
         speakerCount: preset === 'local-diarization' && speakerCount !== 'auto' ? Number(speakerCount) : null
@@ -569,6 +580,8 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
         <div><span className="eyebrow">NEW PROJECT</span><h2>새 대본 만들기</h2></div>
         <p>최대 3시간 · 한국어 우선</p>
       </div>
+      <p className="private-mode-note">기본은 내 PC에서 비공개 작업 · 음성 외부 전송 없음</p>
+      <details className="advanced-analysis"><summary>고급 옵션 · 음성 분석 방식 변경 ({preset === 'openai' ? 'OpenAI' : '내 PC'})</summary>
       <label className="field-label">음성 분석 방식</label>
       <div className="engine-options">
         <button className={preset === 'local' ? 'active' : ''} onClick={() => setPreset('local')}>
@@ -611,6 +624,8 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
           <strong>OpenAI 모드는 API 키가 필요합니다</strong><span>처리를 시작하기 전에 설정에서 등록하세요 →</span>
         </button>
       )}
+      </details>
+      {preset === 'openai' && <label className="consent-check"><input type="checkbox" checked={cloudAudioConsent} onChange={(event) => setCloudAudioConsent(event.target.checked)} />음성을 OpenAI에 전송하는 데 동의합니다. API 사용료가 발생하며, 일부 오류에서 같은 제공자로 최대 1회 재시도합니다 (총 최대 2회 요청).</label>}
       <div className="source-tabs">
         <button className={tab === 'local' ? 'active' : ''} onClick={() => setTab('local')}>내 컴퓨터 파일</button>
         <button className={tab === 'youtube' ? 'active' : ''} onClick={() => setTab('youtube')}>유튜브 링크</button>
@@ -631,7 +646,8 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
         </>
       )}
       {error && <p className="error-text">{error}</p>}
-      <button className="primary-button wide" disabled={busy} onClick={create}>{busy ? '만드는 중…' : '프로젝트 만들기'}</button>
+      <label className="consent-check"><input type="checkbox" checked={rightsConfirmed} onChange={(event) => setRightsConfirmed(event.target.checked)} />이 영상·음성을 사용할 권리가 있습니다.</label>
+      <button className="primary-button wide" disabled={busy || !rightsConfirmed || (preset === 'openai' && !cloudAudioConsent)} onClick={create}>{busy ? '만드는 중…' : '프로젝트 만들기'}</button>
     </section>
   )
 }
@@ -1001,8 +1017,9 @@ type RowContextMenuState = {
   y: number
 }
 
-function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSupport, onRetry, onRepairModel, notify, closeSaveRef }: {
+function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAbout, onSupport, onRetry, onRepairModel, notify, closeSaveRef }: {
   project: ScriptProject
+  processing: boolean
   onProject: (value: ScriptProject) => void
   onBack: () => void
   onSettings: () => void
@@ -1018,8 +1035,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   const [playhead, setPlayhead] = useState(0)
   const [reviewFontSize, setReviewFontSizeState] = useState<number>(() => {
     try {
-      const saved = Number(window.localStorage.getItem(REVIEW_FONT_SIZE_KEY))
-      return normalizeReviewFontSize(saved)
+      return initialReviewFontSize(window.localStorage.getItem(REVIEW_FONT_SIZE_KEY))
     } catch {
       return REVIEW_FONT_SIZE_DEFAULT
     }
@@ -1039,12 +1055,23 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   const editVersionRef = useRef(0)
   const savedVersionRef = useRef(0)
   const savePromiseRef = useRef<Promise<void> | null>(null)
+  const revisionRef = useRef(project.workflow?.revision ?? 0)
+  const mutationRef = useRef(false)
+  const [mutating, setMutating] = useState(false)
+  const editingBlocked = processing || mutating
+  const inlineDraftRef = useRef(inlineDraft)
+  inlineDraftRef.current = inlineDraft
   const errors = useMemo(() => validateRows(rows), [rows])
   const timeIssues = useMemo(() => collectTimeIssues(rows), [rows])
   const selectedIndex = rows.findIndex((row) => row.id === selectedId)
   const contextMenuIndex = contextMenu ? rows.findIndex((row) => row.id === contextMenu.rowId) : -1
   const contextMenuRow = contextMenu ? rows.find((row) => row.id === contextMenu.rowId) ?? null : null
   const selected = rows[selectedIndex]
+  const draftRow = inlineDraft ? rows.find((row) => row.id === inlineDraft.rowId) : undefined
+  const draftInspection = inlineDraft && draftRow ? inspectInlineDraft(draftRow, inlineDraft) : null
+  const pendingDraft = Boolean(draftInspection?.pending)
+  const visibleRows = pendingDraft && draftRow ? rows.map((row) => row.id === draftRow.id ? { ...row, reviewed: false, reviewStatus: 'unreviewed' as const, approvedAt: undefined } : row) : rows
+  const visibleSelected = visibleRows.find((row) => row.id === selectedId)
   const latestRun = project.runs.at(-1)
   const supportsSpeakerLabels = projectSupportsSpeakerLabels(project)
   const reviewFontStyle = useMemo(() => ({
@@ -1070,6 +1097,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     editVersionRef.current = 0
     savedVersionRef.current = 0
     savePromiseRef.current = null
+    revisionRef.current = project.workflow?.revision ?? 0
     setRows(project.rows)
     setSelectedId(project.rows[0]?.id ?? '')
     setInlineDraft(loadDraftFromRow(project.rows[0]))
@@ -1102,12 +1130,13 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     const saveAllPendingEdits = async (): Promise<void> => {
       setSaving(true)
       try {
-        while (savedVersionRef.current < editVersionRef.current) {
-          const version = editVersionRef.current
-          const savedProject = await window.screenScript.saveRows(project.id, rowsRef.current)
-          savedVersionRef.current = version
-          onProject(savedProject)
-        }
+        await savePendingEdits({ rows: rowsRef, edited: editVersionRef, saved: savedVersionRef, revision: revisionRef },
+          (pendingRows, revision) => window.screenScript.saveRows(project.id, pendingRows, revision),
+          (savedProject) => {
+            rowsRef.current = savedProject.rows
+            setRows(savedProject.rows)
+            onProject(savedProject)
+          })
         setDirty(false)
       } finally {
         setSaving(false)
@@ -1122,13 +1151,6 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
       if (savePromiseRef.current === pending) savePromiseRef.current = null
     }
   }, [onProject, project.id])
-
-  useEffect(() => {
-    closeSaveRef.current = flushSave
-    return () => {
-      if (closeSaveRef.current === flushSave) closeSaveRef.current = null
-    }
-  }, [closeSaveRef, flushSave])
 
   useEffect(() => {
     if (!dirty) return
@@ -1158,19 +1180,29 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   }, [])
 
   const applyRows = (next: ScriptRow[]): void => {
-    setHistory((value) => [...value.slice(-29), rows])
-    rowsRef.current = next
+    if (mutationRef.current || processing) return
+    const prepared = prepareEditedRows(rowsRef.current, next)
+    if (prepared.length === rowsRef.current.length && prepared.every((row, index) => row === rowsRef.current[index])) return
+    setHistory((value) => [...value.slice(-29), rowsRef.current])
+    rowsRef.current = prepared
     editVersionRef.current += 1
-    setRows(next)
+    setRows(prepared)
+    const selectedRow = prepared.find((row) => row.id === selectedId)
+    if (selectedRow) {
+      const draft = loadDraftFromRow(selectedRow)
+      inlineDraftRef.current = draft
+      setInlineDraft(draft)
+    }
     setDirty(true)
   }
-  const updateRow = (id: string, patch: Partial<ScriptRow>): void => applyRows(rows.map((row) => row.id === id ? { ...row, ...patch, reviewed: true } : row))
+  const updateRow = (id: string, patch: Partial<ScriptRow>): void => applyRows(rowsRef.current.map((row) => row.id === id ? { ...row, ...patch } : row))
   const updateInlineDraft = (patch: Partial<Omit<InlineRowDraft, 'rowId'>>): void => {
-    setInlineDraft((value) => {
-      if (!value) return value
-      const next = { ...value, ...patch }
-      return next
-    })
+    if (mutationRef.current || processing) return
+    const value = inlineDraftRef.current
+    if (!value) return
+    const nextDraft = { ...value, ...patch }
+    inlineDraftRef.current = nextDraft
+    setInlineDraft(nextDraft)
     setInlineErrors((value) => {
       const next = { ...value }
       if (typeof patch.start === 'string') delete next.start
@@ -1210,46 +1242,94 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     void chooseRow(row)
   }
   const applyInlineDraft = useCallback((): boolean => {
+    const inlineDraft = inlineDraftRef.current
     if (!inlineDraft) return true
-    const target = rows.find((row) => row.id === inlineDraft.rowId)
+    const target = rowsRef.current.find((row) => row.id === inlineDraft.rowId)
     if (!target) return true
 
-    const nextErrors: { start?: string; end?: string } = {}
-    const startMs = parseTimecode(inlineDraft.start)
-    const endMs = parseTimecode(inlineDraft.end)
-
-    if (startMs === null) nextErrors.start = '시작 시간은 MM:SS 형식이어야 합니다.'
-    if (endMs === null) nextErrors.end = '종료 시간은 MM:SS 형식이어야 합니다.'
-    if (startMs !== null && endMs !== null && endMs <= startMs) nextErrors.end = '종료 시간은 시작 시간보다 커야 합니다.'
-
-    if (nextErrors.start || nextErrors.end) {
-      setInlineErrors(nextErrors)
+    const inspected = inspectInlineDraft(target, inlineDraft)
+    if (!inspected.patch) {
+      setInlineErrors(inspected.errors)
       return false
     }
-
-    if (startMs === null || endMs === null) return false
     setInlineErrors({})
-    updateRow(target.id, { startMs, endMs, content: inlineDraft.content })
+    if (inspected.pending) updateRow(target.id, inspected.patch)
     return true
   }, [inlineDraft, rows, updateRow])
+  const applyInlineDraftRef = useRef(applyInlineDraft)
+  applyInlineDraftRef.current = applyInlineDraft
+  useEffect(() => {
+    if (!pendingDraft || editingBlocked) return
+    return scheduleDraftSave(() => !mutationRef.current && applyInlineDraftRef.current(), flushSave, (cause) => notify(errorMessage(cause)))
+  }, [inlineDraft, pendingDraft, editingBlocked, flushSave, notify])
   const chooseRow = (row: ScriptRow): boolean => {
+    if (mutationRef.current || processing) return false
+    if (row.id === selectedId && inlineDraftRef.current?.rowId === row.id) {
+      mediaRef.current?.seek(row.startMs / 1000)
+      return true
+    }
     if (!applyInlineDraft()) {
       return false
     }
     selectRow(row)
     return true
   }
+  const flushDraft = async (): Promise<void> => {
+    if (mutationRef.current) throw new Error('요청을 처리하고 있습니다. 완료 후 다시 시도하세요.')
+    if (!applyInlineDraft()) throw new Error('시작/종료 시간 형식을 확인하세요.')
+    await flushSave()
+  }
+  useEffect(() => {
+    closeSaveRef.current = flushDraft
+    return () => { if (closeSaveRef.current === flushDraft) closeSaveRef.current = null }
+  })
+  useEffect(() => {
+    if (savePromiseRef.current || mutationRef.current || savedVersionRef.current < editVersionRef.current) return
+    revisionRef.current = project.workflow?.revision ?? 0
+  }, [project])
+  const runAction = async (operation: () => Promise<void>): Promise<void> => {
+    if (mutationRef.current || processing) return
+    try {
+      // Commit the current input before locking editing; applyRows refuses writes while locked.
+      if (!applyInlineDraft()) throw new Error('시작/종료 시간 형식을 확인하세요.')
+      mutationRef.current = true
+      setMutating(true)
+      setContextMenu(null)
+      await flushSave()
+      await operation()
+    } catch (cause) { notify(errorMessage(cause)) }
+    finally { mutationRef.current = false; setMutating(false) }
+  }
+  const mutateProject = async (operation: (revision: number) => Promise<ScriptProject>): Promise<void> => {
+    await runAction(async () => {
+      const updated = await operation(revisionRef.current)
+      revisionRef.current = updated.workflow?.revision ?? 0
+      rowsRef.current = updated.rows
+      setRows(updated.rows)
+      const selection = updated.rows.find((row) => row.id === selectedId) ?? updated.rows[0]
+      setSelectedId(selection?.id ?? '')
+      const draft = loadDraftFromRow(selection)
+      inlineDraftRef.current = draft
+      setInlineDraft(draft)
+      setHistory([])
+      setDirty(false)
+      onProject(updated)
+    })
+  }
   const undo = (): void => {
+    if (mutationRef.current || processing) return
     const previous = history.at(-1)
     if (!previous) return
-    rowsRef.current = previous
+    const restored = prepareEditedRows(rowsRef.current, previous)
+    rowsRef.current = restored
     editVersionRef.current += 1
-    setRows(previous)
-    setInlineDraft(loadDraftFromRow(previous[0]))
+    setRows(restored)
+    setInlineDraft(loadDraftFromRow(restored.find((row) => row.id === selectedId) ?? restored[0]))
     setHistory((value) => value.slice(0, -1))
     setDirty(true)
   }
   const splitAtIndex = (index: number): void => {
+    const rows = rowsRef.current
     const row = rows[index]
     if (!row) return
     const midpoint = Math.round(((row.startMs + row.endMs) / 2) / 1000) * 1000
@@ -1261,8 +1341,8 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     const nextSegments = splitSourceSegments(row.sourceSegmentIds, row, point)
     const next = [...rows]
     next.splice(index, 1,
-      { ...row, id: crypto.randomUUID(), endMs: point, reviewed: true, content: left, sourceSegmentIds: nextSegments[0] },
-      { ...row, id: crypto.randomUUID(), startMs: point, reviewed: true, content: right, sourceSegmentIds: nextSegments[1] }
+      { ...row, id: crypto.randomUUID(), endMs: point, reviewed: false, content: left, sourceSegmentIds: nextSegments[0] },
+      { ...row, id: crypto.randomUUID(), startMs: point, reviewed: false, content: right, sourceSegmentIds: nextSegments[1] }
     )
     applyRows(next)
     setSelectedId(next[index].id)
@@ -1273,6 +1353,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     splitAtIndex(selectedIndex)
   }
   const mergeNextAtIndex = (index: number): void => {
+    const rows = rowsRef.current
     if (index < 0 || index >= rows.length - 1) return
     const selectedRow = rows[index]
     const following = rows[index + 1]
@@ -1284,7 +1365,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
       speakers: [...new Set([...selectedRow.speakers, ...following.speakers])],
       content: selectedRow.kind === 'descriptionGap' && following.kind === 'descriptionGap' ? DESCRIPTION_TEXT : `${selectedRow.content} ${following.content}`.trim(),
       sourceSegmentIds: [...selectedRow.sourceSegmentIds, ...following.sourceSegmentIds],
-      reviewed: true
+      reviewed: false
     }
     const next = [...rows]
     next.splice(index, 2, merged)
@@ -1297,6 +1378,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     mergeNextAtIndex(selectedIndex)
   }
   const deleteRowAtIndex = (index: number): void => {
+    const rows = rowsRef.current
     if (index < 0) return
     const target = rows[index]
     if (!target) return
@@ -1315,6 +1397,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     }
   }
   const addBlankRowAtIndex = (index: number, placement: 'before' | 'after'): void => {
+    const rows = rowsRef.current
     if (index < 0) return
     const minGap = 1100
     const safeDuration = Number.isFinite(project.media.durationMs) && project.media.durationMs > 0 ? project.media.durationMs : (rows.at(-1)?.endMs ?? 1000)
@@ -1423,6 +1506,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   }
   const convertContextRowKind = (kind: 'dialogue' | 'descriptionGap'): void => {
     executeContextAction((targetIndex) => {
+      const rows = rowsRef.current
       const row = rows[targetIndex]
       if (!row) return
       if (kind === row.kind) return
@@ -1450,36 +1534,36 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     const to = speakerTo.trim()
     if (!from || !to) return
     const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    applyRows(rows.map((row) => ({
+    applyRows(rowsRef.current.map((row) => ({
       ...row,
       speakers: row.speakers.map((speaker) => speaker === from ? to : speaker),
       content: row.content.replace(new RegExp(`\\[${escaped}\\]`, 'g'), `[${to}]`),
-      reviewed: true
+      reviewed: false
     })))
     setSpeakerFrom('')
     setSpeakerTo('')
   }
   const exportDocument = async (): Promise<void> => {
-    try {
-      if (!applyInlineDraft()) {
-        notify('시작/종료 시간 형식을 확인하세요.')
-        return
-      }
-      await flushSave()
+    await runAction(async () => {
       const result = await window.screenScript.exportHwpx(project.id)
-      if (result) notify(`HWPX를 저장했습니다: ${result.path}`)
-    } catch (cause) { notify(errorMessage(cause)) }
+      if (result) {
+        const updated = await window.screenScript.loadProject(project.id)
+        revisionRef.current = updated.workflow?.revision ?? 0
+        onProject(updated)
+        notify(`HWPX를 저장했습니다: ${result.path}`)
+      }
+    })
   }
   const exportSubtitle = async (): Promise<void> => {
-    try {
-      if (!applyInlineDraft()) {
-        notify('시작/종료 시간 형식을 확인하세요.')
-        return
-      }
-      await flushSave()
+    await runAction(async () => {
       const result = await window.screenScript.exportSrt(project.id)
-      if (result) notify(`SRT를 저장했습니다: ${result.path}`)
-    } catch (cause) { notify(errorMessage(cause)) }
+      if (result) {
+        const updated = await window.screenScript.loadProject(project.id)
+        revisionRef.current = updated.workflow?.revision ?? 0
+        onProject(updated)
+        notify(`SRT를 저장했습니다: ${result.path}`)
+      }
+    })
   }
   const exportDiagnostics = async (): Promise<void> => {
     try {
@@ -1497,17 +1581,18 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
     }
   }
   const leaveReview = (navigate: () => void): void => {
+    if (mutationRef.current || processing) return
     void (async () => {
       try {
-        if (!applyInlineDraft()) {
-          notify('시작/종료 시간 형식을 확인하세요.')
-          return
-        }
+        if (!applyInlineDraft()) throw new Error('시작/종료 시간 형식을 확인하세요.')
+        mutationRef.current = true
+        setMutating(true)
         await flushSave()
+        mutationRef.current = false
+        setMutating(false)
         navigate()
-      } catch (cause) {
-        notify(`수정 내용을 저장하지 못해 화면을 이동하지 않았습니다. ${errorMessage(cause)}`)
-      }
+      } catch (cause) { notify(errorMessage(cause)) }
+      finally { mutationRef.current = false; setMutating(false) }
     })()
   }
   const openCurrentYoutubeInBrowser = (): void => {
@@ -1517,21 +1602,22 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
   }
 
   return (
-    <div className="review-page">
+    <div className="review-page" aria-busy={editingBlocked}>
+      {editingBlocked && <div className="editor-busy" role="status">{processing ? '음성 분석 중입니다. 편집은 완료 후 계속할 수 있습니다.' : '저장 후 요청을 처리하고 있습니다…'}</div>}
       <header className="review-header">
         <div className="review-title"><button className="icon-button" onClick={() => leaveReview(onBack)}>←</button><div><span>검수 프로젝트</span><h1>{project.title}</h1></div></div>
         <div className="review-actions">
           <button className="header-link" onClick={() => leaveReview(onAbout)}>About GiNuNi</button>
           <button className="header-link sponsor-link" onClick={() => leaveReview(onSupport)}>♥ 개발자 후원</button>
           <button className="header-link" onClick={() => leaveReview(onSettings)}>설정</button>
-          <span className="autosave">{saving ? '저장 중…' : dirty ? '수정됨' : '자동 저장됨'}</span>
-          <button className="secondary-button" disabled={!history.length} onClick={undo}>실행 취소</button>
-          <button className="secondary-button" disabled={errors.length > 0 || rows.length === 0} onClick={exportSubtitle}>SRT 내보내기</button>
-          <button className="primary-button" disabled={errors.length > 0 || rows.length === 0} onClick={exportDocument}>HWPX 내보내기</button>
+          <span className="autosave" role="status">{pendingDraft ? (draftInspection?.patch ? '입력 중 · 저장 대기' : '시간 입력 확인 · 저장 대기') : saving ? '저장 중…' : dirty ? '수정됨' : '자동 저장됨'}</span>
+          <button className="secondary-button" disabled={editingBlocked || !history.length} onClick={undo}>실행 취소</button>
+          <button className="secondary-button" disabled={editingBlocked || errors.length > 0 || rows.length === 0} onClick={exportSubtitle}>SRT 내보내기</button>
+          <button className="primary-button" disabled={editingBlocked || errors.length > 0 || rows.length === 0} onClick={exportDocument}>HWPX 내보내기</button>
         </div>
       </header>
 
-      <div className="review-grid">
+      <fieldset className="review-lock" disabled={editingBlocked}><div className="review-grid">
         <aside className="media-panel">
           <MediaPlayer ref={mediaRef} project={project} onTime={setPlayhead} onError={setMediaError} onReady={() => setMediaError('')} />
           {mediaError && <p className="media-error">{mediaError}</p>}
@@ -1539,8 +1625,6 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
             <button className="secondary-button" onClick={openCurrentYoutubeInBrowser}>브라우저에서 직접 열기</button>
           )}
           <div className="playhead-card"><span>현재 재생 위치</span><strong>{formatTimecode(playhead * 1000)}</strong></div>
-            {selected && (
-              <div className="edit-card">
                 <div className="review-font-control" aria-label="검수 편집 창 글자 크기 조절">
                   <span>글자 크기</span>
                   <button onClick={() => void setReviewFontSize(reviewFontSize - 1)} disabled={reviewFontSize <= REVIEW_FONT_SIZE_MIN}>−</button>
@@ -1556,6 +1640,9 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                   <button onClick={() => void setReviewFontSize(reviewFontSize + 1)} disabled={reviewFontSize >= REVIEW_FONT_SIZE_MAX}>＋</button>
                   <span className="review-font-size-label">{reviewFontSize}px</span>
                 </div>
+          <WorkflowPanel project={project} rows={visibleRows} selected={visibleSelected} busy={editingBlocked} mutate={mutateProject} action={runAction} choose={(row) => { chooseRow(row) }} seek={(seconds) => mediaRef.current?.seek(seconds)} />
+            {selected && (
+              <div className="edit-card">
                 <div className="edit-card-heading"><h3>선택한 행 편집</h3><span>{selected.kind === 'dialogue' ? '대사' : '해설'}</span></div>
                 <p className="help-text" style={{ margin: 0, marginBottom: 10, color: '#596563', fontSize: 12 }}>행 편집은 표에서 직접 수정하세요.</p>
               <label className="field-label">분류</label>
@@ -1605,7 +1692,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                 ))}
                 {latestRun?.diarization?.status === 'fallback' && <p>대사 인식은 완료했으며 화자 표기 없이 검수·HWPX·SRT 작업을 계속할 수 있습니다.</p>}
                 <div className="error-actions">
-                  <button className="secondary-button compact-action" onClick={onRetry}>다시 분석</button>
+                  <button className="secondary-button compact-action" onClick={() => leaveReview(onRetry)}>다시 분석</button>
                   <button className="secondary-button compact-action" onClick={exportDiagnostics}>진단 파일 저장</button>
                 </div>
               </div>
@@ -1625,7 +1712,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                 {latestRun?.apiDetail && <small>서버 안내: {latestRun.apiDetail}</small>}
                 <p className="error-resolution">{processingResolution(latestRun?.errorCode)}</p>
                 <div className="error-actions">
-                  <button className="secondary-button compact-action" onClick={onRetry}>{latestRun?.errorCode === 'OPENAI_UNPROCESSABLE_AUDIO' ? '오디오 형식 변환 후 재시도' : '다시 분석'}</button>
+                  <button className="secondary-button compact-action" onClick={() => leaveReview(onRetry)}>{latestRun?.errorCode === 'OPENAI_UNPROCESSABLE_AUDIO' ? '오디오 형식 변환 후 재시도' : '다시 분석'}</button>
                   {(project.transcriptionEngine ?? 'local') === 'local' && <button className="secondary-button compact-action" onClick={onRepairModel}>로컬 모델 복구</button>}
                   {latestRun?.requestId && <button className="secondary-button compact-action" onClick={() => void copyRequestId()}>요청 ID 복사</button>}
                   <button className="secondary-button compact-action" onClick={exportDiagnostics}>진단 파일 저장</button>
@@ -1667,14 +1754,18 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                     return (
                       <tr
                         key={row.id}
+                        tabIndex={editingBlocked ? -1 : 0}
+                        aria-label={`${row.kind === 'dialogue' ? '대사' : '해설'} ${formatTimecode(row.startMs)} ${pendingDraft && draftRow?.id === row.id ? '수정 중 · 확인 전' : rowReviewStatus(row) === 'approved' ? '확인 완료' : '확인 필요'}`}
+                        onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); chooseRow(row) } }}
                         className={`${row.kind === 'descriptionGap' ? 'gap-row' : ''} ${selectedId === row.id ? 'selected-row' : ''}`}
-                        onClick={() => void chooseRow(row)}
+                        onClick={(event) => { if (!(event.target as Element).closest('input, textarea, button')) chooseRow(row) }}
                         onContextMenu={(event) => openContextMenu(event, row.id)}
                       >
                         <td><span className={`kind-badge ${row.kind}`}>{row.kind === 'dialogue' ? '대사' : '해설'}</span></td>
                         <td>
                           {isEditing ? (
                             <input
+                              aria-label="선택한 행 시작 시간"
                               className={`inline-time-input ${inlineErrors.start && isEditing ? 'inline-field-error' : ''}`}
                               value={draft?.start ?? formatTimecode(row.startMs)}
                               onChange={(event) => {
@@ -1696,6 +1787,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                         <td>
                           {isEditing ? (
                             <input
+                              aria-label="선택한 행 종료 시간"
                               className={`inline-time-input ${inlineErrors.end && isEditing ? 'inline-field-error' : ''}`}
                               value={draft?.end ?? formatTimecode(row.endMs)}
                               onChange={(event) => {
@@ -1718,6 +1810,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                         <td className="content-cell" style={{ ...reviewFontStyle, minHeight: `${Math.max(72, Math.round(reviewFontSize * 4.8))}px` }}>
                           {isEditing ? (
                             <textarea
+                              aria-label="선택한 행 대본 내용"
                               className="inline-content-editor"
                               ref={inlineContentRef}
                               value={draft?.content ?? row.content}
@@ -1735,7 +1828,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
                             <div className="content-display" style={reviewFontStyle}>{row.content}</div>
                           )}
                         </td>
-                        <td>{row.reviewed ? <span className="reviewed-mark">✓</span> : <span className="unreviewed-mark">—</span>}</td>
+                        <td>{pendingDraft && draftRow?.id === row.id ? <span className="unreviewed-mark">수정 중 · 확인 전</span> : rowReviewStatus(row) === 'approved' ? <span className="reviewed-mark">✓ 확인 완료</span> : <span className="unreviewed-mark">{rowReviewStatus(row) === 'needsAttention' ? '! 주의 필요' : '확인 전'}</span>}</td>
                       </tr>
                     )
                   })()
@@ -1756,7 +1849,7 @@ function ReviewScreen({ project, onProject, onBack, onSettings, onAbout, onSuppo
             {rows.length === 0 && <div className="empty-table">아직 분석된 대본이 없습니다. 상단의 처리 시작 버튼으로 음성을 분석하세요.</div>}
           </div>
         </main>
-      </div>
+      </div></fieldset>
     </div>
   )
 }
@@ -1771,6 +1864,8 @@ export default function App() {
   const [progress, setProgress] = useState<ProcessingProgress | null>(null)
   const [notice, setNotice] = useState('')
   const [fatal, setFatal] = useState('')
+  const [projectBusy, setProjectBusy] = useState(false)
+  const projectBusyRef = useRef(false)
   const closeSaveRef = useRef<(() => Promise<void>) | null>(null)
 
   const refresh = async (): Promise<void> => {
@@ -1813,14 +1908,19 @@ export default function App() {
     } catch (cause) { setNotice(errorMessage(cause)) }
   }
   const startProcessing = async (): Promise<void> => {
-    if (!project) return
+    if (!project || projectBusyRef.current) return
+    projectBusyRef.current = true
     try {
+      await closeSaveRef.current?.()
+      if (!project.workflow?.consent.rightsConfirmedAt) throw new Error('왼쪽의 사용 권리와 외부 전송 설정에서 영상 사용 권리를 확인하고 저장하세요.')
+      if (projectPreset(project) === 'openai' && !project.workflow?.consent.cloudAudioConsentAt) throw new Error('왼쪽의 사용 권리와 외부 전송 설정에서 음성 외부 전송 동의를 저장하세요.')
+      setProjectBusy(true)
       setProgress({ projectId: project.id, stage: 'preparing', percent: 1, message: '처리를 시작합니다.' })
       const processed = await window.screenScript.processProject(project.id)
       setProject(processed)
       await refresh()
     } catch (cause) { setNotice(errorMessage(cause)); setProject(await window.screenScript.loadProject(project.id)) }
-    finally { window.setTimeout(() => setProgress(null), 800) }
+    finally { projectBusyRef.current = false; setProjectBusy(false); window.setTimeout(() => setProgress(null), 800) }
   }
   const repairLocalModel = async (): Promise<void> => {
     try {
@@ -1831,8 +1931,11 @@ export default function App() {
     } catch (cause) { setNotice(errorMessage(cause)) }
   }
   const changePreset = async (preset: AnalysisPreset): Promise<void> => {
-    if (!project) return
+    if (!project || projectBusyRef.current) return
+    projectBusyRef.current = true
     try {
+      await closeSaveRef.current?.()
+      setProjectBusy(true)
       const engine = preset === 'openai' ? 'openai' : 'local'
       let updated = await window.screenScript.setTranscriptionEngine(project.id, engine)
       if (engine === 'local') {
@@ -1845,23 +1948,34 @@ export default function App() {
       setProject(updated)
     }
     catch (cause) { setNotice(errorMessage(cause)) }
+    finally { projectBusyRef.current = false; setProjectBusy(false) }
   }
   const changeSpeakerCount = async (value: string): Promise<void> => {
-    if (!project) return
+    if (!project || projectBusyRef.current) return
+    projectBusyRef.current = true
     try {
+      await closeSaveRef.current?.()
+      setProjectBusy(true)
       setProject(await window.screenScript.setLocalDiarizationConfig(project.id, {
         mode: 'sherpa-onnx',
         speakerCount: value === 'auto' ? null : Number(value)
       }))
     } catch (cause) { setNotice(errorMessage(cause)) }
+    finally { projectBusyRef.current = false; setProjectBusy(false) }
   }
   const removeProject = async (summary: ProjectSummary): Promise<void> => {
     if (!window.confirm(`“${summary.title}” 프로젝트와 내려받은 음성을 삭제할까요?`)) return
     try { await window.screenScript.deleteProject(summary.id); await refresh() } catch (cause) { setNotice(errorMessage(cause)) }
   }
   const openAuxiliary = (target: 'settings' | 'about' | 'support' | 'guide'): void => {
-    setReturnScreen(screen === 'review' && project ? 'review' : 'home')
-    setScreen(target)
+    void (async () => {
+      try {
+        if (projectBusyRef.current) return
+        if (screen === 'review') await closeSaveRef.current?.()
+        setReturnScreen(screen === 'review' && project ? 'review' : 'home')
+        setScreen(target)
+      } catch (cause) { setNotice(errorMessage(cause)) }
+    })()
   }
   const closeAuxiliary = (): void => setScreen(returnScreen === 'review' && project ? 'review' : 'home')
   const checkUpdates = async (): Promise<void> => {
@@ -1889,6 +2003,7 @@ export default function App() {
         <ReviewScreen
           key={`${project.id}:${project.runs.length}`}
           project={project}
+          processing={projectBusy || Boolean(progress && progress.percent < 100)}
           onProject={setProject}
           notify={setNotice}
           onBack={() => { setScreen('home'); refresh().catch(() => undefined) }}
@@ -1901,18 +2016,20 @@ export default function App() {
         />
         {project.status !== 'review' && project.status !== 'exported' && (
           <>
+            <details className="floating-analysis-options"><summary>고급 분석 옵션</summary>
             {projectPreset(project) === 'local-diarization' && (
-              <select className="floating-speaker-count" value={project.localDiarization.speakerCount ?? 'auto'} onChange={(event) => void changeSpeakerCount(event.target.value)}>
+              <select aria-label="화자 수" disabled={projectBusy} value={project.localDiarization.speakerCount ?? 'auto'} onChange={(event) => void changeSpeakerCount(event.target.value)}>
                 <option value="auto">화자 수 자동</option>
                 {Array.from({ length: 9 }, (_, index) => index + 2).map((count) => <option key={count} value={count}>화자 {count}명</option>)}
               </select>
             )}
-            <select className="floating-engine" value={projectPreset(project)} onChange={(event) => void changePreset(event.target.value as AnalysisPreset)}>
+            <select aria-label="음성 분석 방식" disabled={projectBusy} value={projectPreset(project)} onChange={(event) => void changePreset(event.target.value as AnalysisPreset)}>
               <option value="local">내 PC에서 분석</option>
               <option value="local-diarization" disabled={!bootstrap.diarizationBundle.available}>내 PC + 화자 분리 (실험)</option>
               <option value="openai">OpenAI로 분석 (화자 분리)</option>
             </select>
-            <button className="floating-process" onClick={startProcessing}>{projectPreset(project) === 'openai' ? 'OpenAI 음성 분석 시작' : projectPreset(project) === 'local-diarization' ? '로컬 화자 분석 시작' : '로컬 음성 분석 시작'}</button>
+            </details>
+            <button disabled={projectBusy} className="floating-process" onClick={startProcessing}>{projectPreset(project) === 'openai' ? 'OpenAI 음성 분석 시작' : projectPreset(project) === 'local-diarization' ? '로컬 화자 분석 시작' : '로컬 음성 분석 시작'}</button>
           </>
         )}
         <button className="floating-settings" onClick={() => openAuxiliary('settings')}>설정</button>
@@ -1940,6 +2057,7 @@ export default function App() {
       </aside>
       <main className="home-page">
         <header className="home-header"><div><span className="eyebrow">SCREEN DESCRIPTION WORKSPACE</span><h1>작가의 시간을 대사 정리가 아닌<br /><em>화면해설</em>에 쓰세요.</h1><p>영상 속 음성과 화자를 분석해, 검수 가능한 타임스탬프 대본으로 정리합니다.</p></div><button className="settings-link" onClick={() => openAuxiliary('settings')}>설정</button></header>
+        <ol className="workflow-steps" aria-label="대본 작업 3단계"><li><strong>1. 영상 선택</strong><span>사용 권리를 확인하고 대사 초안 준비</span></li><li><strong>2. 듣고 확인</strong><span>대사를 검수하고 화면해설 직접 작성</span></li><li><strong>3. 대본 저장</strong><span>확인 상태를 살펴 HWPX·SRT로 내보내기</span></li></ol>
         <div className="home-columns">
           <div>{showNew ? <NewProjectPanel bootstrap={bootstrap} onOpenSettings={() => openAuxiliary('settings')} onCreated={(value) => { setProject(value); setScreen('review') }} /> : <EmptyState onNew={() => setShowNew(true)} />}</div>
           <section className="recent-card">

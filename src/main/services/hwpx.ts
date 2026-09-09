@@ -114,7 +114,7 @@ function rowValues(row: ScriptRow): string[] {
     formatTimecode(row.startMs),
     formatTimecode(row.endMs),
     String(intervalSeconds(row.startMs, row.endMs)),
-    row.kind === 'descriptionGap' ? DESCRIPTION_TEXT : row.content
+    row.kind === 'descriptionGap' && !row.content.trim() ? DESCRIPTION_TEXT : row.content
   ]
 }
 
@@ -144,7 +144,7 @@ function updateSection(sectionXml: string, title: string, rows: ScriptRow[]): st
     const cells = directChildren(row, 'hp:tc')
     if (cells.length !== 5) throw new Error('HWPX 표의 열 개수가 5개가 아닙니다.')
     cells.forEach((cell, cellIndex) => setCellText(cell, values[cellIndex]))
-    const height = scriptRow.kind === 'dialogue' ? estimateDialogueHeight(values[4]) : 2753
+    const height = Math.max(scriptRow.kind === 'dialogue' ? 2469 : 2753, estimateDialogueHeight(values[4]))
     setRowGeometry(row, index + 1, height)
     totalHeight += height
     table.appendChild(row)

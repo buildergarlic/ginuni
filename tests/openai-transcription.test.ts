@@ -1,6 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import OpenAI from 'openai'
+
+vi.mock('@main/services/openai-audio', () => ({
+  inspectOpenAiAudio: vi.fn(async () => ({ extension: '.webm', bytes: 4, durationMs: 1_000, codec: 'opus', sampleRate: 16_000, channels: 1 })),
+  reencodeOpenAiAudio: vi.fn()
+}))
+
 import {
+  OpenAiTranscriptionProvider,
   TranscriptionFailure,
   classifyOpenAiError,
   normalizeDiarizedResponse,
@@ -148,13 +155,64 @@ describe('normalizeDiarizedResponse', () => {
     const result = normalizeDiarizedResponse({
       segments: [
         { start: 1.25, end: 2.5, speaker: 'B', text: ' 첫 대사 ' },
-        { start: 2.5, end: 3.75, speaker: 'A', text: '두 번째 대사' },
-        { start: 4, end: 4, speaker: 'A', text: '잘못된 구간' }
+        { start: 2.5, end: 3.75, speaker: 'A', text: '두 번째 대사' }
       ]
     })
 
     expect(result).toHaveLength(2)
     expect(result[0]).toMatchObject({ startMs: 1250, endMs: 2500, speakerId: '화자1', text: '첫 대사' })
     expect(result[1]).toMatchObject({ startMs: 2500, endMs: 3750, speakerId: '화자2', text: '두 번째 대사' })
+  })
+
+  it.each([
+    null,
+    { start: 0, end: 1, speaker: 'A', text: 123 },
+    { start: Number.NaN, end: 1, speaker: 'A', text: '대사' },
+    { start: -1, end: 1, speaker: 'A', text: '대사' },
+    { start: 1, end: 1, speaker: 'A', text: '대사' },
+    { start: 2, end: 1, speaker: 'A', text: '대사' },
+    { start: 0, end: 1, speaker: 'A', text: '   ' },
+    { start: 0, end: 1, speaker: 7, text: '대사' }
+  ])('비어 있지 않은 응답의 잘못된 구간을 버리지 않고 거부한다: %j', (segment) => {
+    expect(() => normalizeDiarizedResponse({ segments: [segment] })).toThrowError(
+      expect.objectContaining({ code: 'OPENAI_RESPONSE_INVALID' })
+    )
+  })
+
+  it('화자가 없는 구간에 화자 라벨을 만들어내지 않는다', () => {
+    expect(normalizeDiarizedResponse({
+      segments: [{ start: 0, end: 1, text: '화자 정보 없음' }]
+    })[0]).toMatchObject({ speakerId: '', text: '화자 정보 없음' })
+  })
+})
+
+describe('OpenAiTranscriptionProvider 요청 경계', () => {
+  it('SDK 내부 재시도를 끄고 요청 시간을 10분 이하로 제한한다', async () => {
+    const create = vi.fn(async (_body: unknown, _options?: unknown) => ({ segments: [] }))
+    const provider = new OpenAiTranscriptionProvider('sk-test-placeholder', {
+      audio: { transcriptions: { create } }
+    } as unknown as OpenAI)
+
+    await provider.transcribe({ audioPath: 'package.json', language: 'ko' })
+
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(create.mock.calls[0][1]).toMatchObject({ maxRetries: 0, timeout: 600_000 })
+  })
+
+  it('language 호환 재시도를 한 번만 수행하고 안전한 사유를 알린다', async () => {
+    const failure = new TranscriptionFailure('OPENAI_BAD_REQUEST', '안전한 메시지', { apiParam: 'language' })
+    const create = vi.fn()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce({ segments: [] })
+    const onRetry = vi.fn()
+    const provider = new OpenAiTranscriptionProvider('sk-test-placeholder', {
+      audio: { transcriptions: { create } }
+    } as unknown as OpenAI)
+
+    await provider.transcribe({ audioPath: 'package.json', language: 'ko', onRetry })
+
+    expect(create).toHaveBeenCalledTimes(2)
+    expect(onRetry).toHaveBeenCalledOnce()
+    expect(onRetry).toHaveBeenCalledWith('OpenAI 호환성을 위해 언어 설정 없이 한 번 더 요청합니다.')
   })
 })

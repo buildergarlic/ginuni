@@ -350,3 +350,10 @@ AI Hub 자료는 개별 데이터셋의 이용정책과 권리 범위를 확인�
 - [SubER 공식 구현](https://github.com/apptek/SubER)
 - [pyannote.audio](https://github.com/pyannote/pyannote-audio)
 - 저장소의 `README.md`, `docs/ARCHITECTURE.md`, `docs/USER_GUIDE.md`, `docs/RELEASE.md`
+
+## 14. 검증 가능한 AI 워크플로우 설계도
+
+2026-08-31에 실제 작업 중 검사, 작가 승인, 로컬 근거 기록, 개발자용 정답 기반 평가를 분리한 제안 설계도를 추가했다. 자동 검사 통과는 대사·해설의 정답 보장이 아니며 최종 판단은 작가가 담당한다.
+
+- [설계도 이미지와 상세 설명](../../diagrams/2026-08-31-verifiable-ai-workflow.md)
+- [PNG 설계도](../../diagrams/assets/ginuni-verifiable-ai-workflow-2026-08-31.png)

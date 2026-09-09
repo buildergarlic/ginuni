@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { ceilToSecond, floorToSecond, formatTimecode, intervalSeconds, parseTimecode } from '@shared/timecode'
 
 describe('timecode', () => {
+  it('preserves millisecond endpoints for short intervals and accepts fractional edits', () => {
+    expect(formatTimecode(10_500)).toBe('00:10.500')
+    expect(formatTimecode(400)).toBe('00:00.400')
+    expect(parseTimecode('00:10.5')).toBe(10_500)
+    expect(parseTimecode('00:00.04')).toBe(40)
+    expect(parseTimecode('00:00.001')).toBe(1)
+    expect(parseTimecode('00:10.1234')).toBeNull()
+  })
   it('시작은 내리고 종료는 올린다', () => {
     expect(floorToSecond(3_999)).toBe(3_000)
     expect(ceilToSecond(3_001)).toBe(4_000)

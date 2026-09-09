@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto'
-import { createReadStream } from 'node:fs'
 import { mkdir, readdir, stat } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import { access } from 'node:fs/promises'
@@ -8,6 +6,7 @@ import type { ProcessingProgress, ScriptProject, TranscriptionEngine } from '@sh
 import { runProcess } from './process-runner'
 import { classifyProcessFailure, LocalProcessingError } from './processing-errors'
 import { runtimeExecutable } from './runtime'
+import { fileSha256 } from './file-hash'
 
 interface ProbeResult {
   format?: { duration?: string }
@@ -32,16 +31,6 @@ function ensureYouTubeUrl(value: string): void {
   if (!['youtube.com', 'm.youtube.com', 'youtu.be'].includes(host)) throw new Error('공개 또는 일부공개 유튜브 링크만 지원합니다.')
 }
 
-async function sha256(filePath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const hash = createHash('sha256')
-    const stream = createReadStream(filePath)
-    stream.on('data', (chunk) => hash.update(chunk))
-    stream.on('error', reject)
-    stream.on('end', () => resolve(hash.digest('hex')))
-  })
-}
-
 async function probe(filePath: string, signal?: AbortSignal): Promise<ProbeResult> {
   const ffprobe = await runtimeExecutable('ffprobe')
   try {
@@ -54,6 +43,17 @@ async function probe(filePath: string, signal?: AbortSignal): Promise<ProbeResul
     }
     throw classifyProcessFailure(error, 'probe', 'FFPROBE_FAILED')
   }
+}
+
+function requireAudioTrack(value: ProbeResult, stage: 'probe' | 'encoding'): void {
+  if (value.streams?.some((stream) => stream.codec_type === 'audio')) return
+  throw new LocalProcessingError({
+    code: stage === 'probe' ? 'FFPROBE_FAILED' : 'FFMPEG_FAILED',
+    stage,
+    message: stage === 'probe'
+      ? '원본 영상에서 음성 트랙을 찾을 수 없습니다.'
+      : '변환된 파일에서 음성 트랙을 찾을 수 없습니다.'
+  })
 }
 
 function durationFromProbe(value: ProbeResult): number {
@@ -115,6 +115,13 @@ export async function prepareMedia(options: {
     project.media.durationMs = Math.round(metadata.duration * 1000)
     progress({ stage: 'downloading', percent: 15, message: '전사용 음성을 내려받고 있습니다.' })
     sourcePath = await downloadYouTubeAudio(project.source.uri, mediaDirectory, signal)
+    try {
+      project.source.sha256 = await fileSha256(sourcePath, signal)
+    } catch {
+      if (signal?.aborted) throw new DOMException('작업이 취소되었습니다.', 'AbortError')
+      throw new LocalProcessingError({ code: 'MEDIA_UNREADABLE', stage: 'media', message: '내려받은 원본 음성을 읽을 수 없습니다.' })
+    }
+    requireAudioTrack(await probe(sourcePath, signal), 'probe')
   } else {
     sourcePath = project.source.localMediaPath ?? project.source.uri
     try {
@@ -124,13 +131,15 @@ export async function prepareMedia(options: {
     }
     progress({ stage: 'probing', percent: 8, message: '영상 정보를 확인하고 있습니다.' })
     const details = await probe(sourcePath, signal)
+    requireAudioTrack(details, 'probe')
     project.media.durationMs = durationFromProbe(details)
     const video = details.streams?.find((stream) => stream.codec_type === 'video')
     project.media.width = video?.width
     project.media.height = video?.height
     try {
-      project.source.sha256 = await sha256(sourcePath)
+      project.source.sha256 = await fileSha256(sourcePath, signal)
     } catch {
+      if (signal?.aborted) throw new DOMException('작업이 취소되었습니다.', 'AbortError')
       throw new LocalProcessingError({ code: 'MEDIA_UNREADABLE', stage: 'media', message: '원본 파일을 읽을 수 없습니다. 파일 권한과 저장 위치를 확인하세요.' })
     }
   }
@@ -159,6 +168,9 @@ export async function prepareMedia(options: {
     throw new LocalProcessingError({ code: 'FFMPEG_FAILED', stage: 'encoding', message: '분석용 음성 파일이 생성되지 않았습니다.' })
   }
   if (!local && audioBytes > MAX_UPLOAD_BYTES) throw new Error('전사용 음성이 24.5MB를 초과했습니다.')
+  const encodedDetails = await probe(audioPath, signal)
+  requireAudioTrack(encodedDetails, 'encoding')
+  durationFromProbe(encodedDetails)
   project.media.audioPath = audioPath
   project.media.audioBytes = audioBytes
   return project

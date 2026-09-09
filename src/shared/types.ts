@@ -101,6 +101,63 @@ export interface ScriptRow {
   content: string
   sourceSegmentIds: string[]
   reviewed: boolean
+  reviewStatus?: 'unreviewed' | 'needsAttention' | 'approved'
+  approvedAt?: string
+}
+
+export interface ReviewIssue {
+  id: string
+  rowId?: string
+  segmentId?: string
+  code: string
+  severity: 'error' | 'warning'
+  message: string
+}
+
+export interface CorrectionProposal {
+  id: string
+  rowId: string
+  before: string
+  after: string
+  reason: string
+  status: 'pending' | 'applied' | 'rejected' | 'stale'
+  createdAt: string
+  decidedAt?: string
+  model: string
+  promptVersion: string
+  runId: string
+}
+
+export interface WorkflowEvent {
+  id: string
+  at: string
+  action: string
+  actor: 'writer' | 'system'
+  rowIds?: string[]
+  runId?: string
+  changes?: { rowId: string; before?: ScriptRow; after?: ScriptRow }[]
+  detail?: string
+}
+
+export interface ProjectConsent {
+  rightsConfirmedAt?: string
+  cloudAudioConsentAt?: string
+  cloudCorrectionConsentAt?: string
+}
+
+export interface ProjectWorkflow {
+  version: 1
+  revision: number
+  consent: ProjectConsent
+  events: WorkflowEvent[]
+  proposals: CorrectionProposal[]
+}
+
+export interface ProjectSnapshot {
+  id: string
+  createdAt: string
+  reason: string
+  rowCount: number
 }
 
 export interface ProcessingRun {
@@ -128,6 +185,15 @@ export interface ProcessingRun {
   openaiAudio?: OpenAiAudioInfo
   diarization?: DiarizationRunInfo
   warnings?: ProcessingWarning[]
+  inputSha256?: string
+  audioSha256?: string
+  requestAttempts?: number
+  retryLimit?: number
+  sourceSegments?: TranscriptSegment[]
+  pipelineVersion?: string
+  promptVersion?: string
+  checks?: ReviewIssue[]
+  outcome?: 'succeeded' | 'failed' | 'cancelled'
 }
 
 export interface OpenAiRequestInfo {
@@ -146,11 +212,23 @@ export interface OpenAiAudioInfo {
   channels?: number
 }
 
-export interface ExportRecord {
+export interface ExportProvenance {
+  sourceRunIds: string[]
+  sourceProvenance: 'resolved' | 'multiple' | 'unavailable' | 'partial'
+  unresolvedSourceSegmentIds: string[]
+  unattributedRowIds: string[]
+  runId?: string
+}
+
+export interface ExportRecord extends Partial<ExportProvenance> {
   path: string
   exportedAt: string
   appVersion: string
   format?: 'hwpx' | 'srt'
+  sha256?: string
+  workflowRevision?: number
+  unreviewedCount?: number
+  runId?: string
 }
 
 export interface ScriptProject {
@@ -169,6 +247,7 @@ export interface ScriptProject {
   runs: ProcessingRun[]
   exports: ExportRecord[]
   lastError?: string
+  workflow?: ProjectWorkflow
 }
 
 export interface ProjectSummary {
@@ -193,6 +272,7 @@ export interface TranscriptionRequest {
   durationMs?: number
   signal?: AbortSignal
   onProgress?: (percent: number) => void
+  onRetry?: (reason: string) => void
 }
 
 export interface TranscriptionProvider {
@@ -206,6 +286,8 @@ export interface CreateProjectInput {
   title?: string
   transcriptionEngine?: TranscriptionEngine
   localDiarization?: LocalDiarizationConfig
+  rightsConfirmed?: boolean
+  cloudAudioConsent?: boolean
 }
 
 export interface LocalModelStatus {
@@ -286,7 +368,14 @@ export interface AppApi {
   chooseLocalMedia(): Promise<string | null>
   createProject(input: CreateProjectInput): Promise<ScriptProject>
   loadProject(id: string): Promise<ScriptProject>
-  saveRows(id: string, rows: ScriptRow[]): Promise<ScriptProject>
+  saveRows(id: string, rows: ScriptRow[], expectedRevision?: number): Promise<ScriptProject>
+  setProjectConsent(id: string, consent: { rightsConfirmed: boolean; cloudAudioConsent: boolean; cloudCorrectionConsent: boolean }): Promise<ScriptProject>
+  reviewRows(id: string, rowIds: string[], approved: boolean, expectedRevision: number): Promise<ScriptProject>
+  listSnapshots(id: string): Promise<ProjectSnapshot[]>
+  restoreSnapshot(id: string, snapshotId: string, expectedRevision: number): Promise<ScriptProject>
+  requestCorrections(id: string, rowIds: string[], expectedRevision: number): Promise<ScriptProject>
+  decideCorrection(id: string, proposalId: string, decision: 'apply' | 'reject', expectedRevision: number): Promise<ScriptProject>
+  exportEvidence(id: string): Promise<{ path: string } | null>
   exportSrt(id: string): Promise<{ path: string; format: 'srt' } | null>
   setTranscriptionEngine(id: string, engine: TranscriptionEngine): Promise<ScriptProject>
   setLocalDiarizationConfig(id: string, config: LocalDiarizationConfig): Promise<ScriptProject>

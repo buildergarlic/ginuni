@@ -18,3 +18,5 @@ resources/whisper-v*/
 *.tmp
 .DS_Store
 Thumbs.db
+output/playwright/
+.superpowers/sdd/2026-09-09-verifiable-workflow-implementation/

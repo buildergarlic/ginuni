@@ -16,6 +16,7 @@
     "sync:assets": "node scripts/sync-runtime-assets.mjs",
     "sanitize:template": "tsx scripts/sanitize-template.ts",
     "qa:hwpx": "tsx scripts/create-qa-hwpx.ts",
+    "evaluate:workflow": "tsx scripts/evaluate-workflow.ts",
     "dist:win": "npm run sync:assets && npm run build && electron-builder --win nsis",
     "verify": "npm run typecheck && npm run test && npm run build"
   },

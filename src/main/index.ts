@@ -4,9 +4,8 @@ import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { totalmem } from 'node:os'
 import { LOCAL_ENGINE_VERSION, OPENAI_MODEL } from '@shared/constants'
-import { generateScriptRows, validateRows } from '@shared/rows'
 import { supportsSpeakerLabels } from '@shared/speaker-labels'
-import type { CreateProjectInput, ExternalLinkTarget, LocalDiarizationConfig, LocalModelStatus, ModelDownloadProgress, ProcessingProgress, ProcessingRun, ProcessingWarning, ScriptProject, ScriptRow, TranscriptionEngine } from '@shared/types'
+import type { AppApi, CreateProjectInput, ExternalLinkTarget, LocalDiarizationConfig, LocalModelStatus, ModelDownloadProgress, ProcessingProgress, ProcessingRun, ProcessingWarning, ScriptProject, ScriptRow, TranscriptionEngine } from '@shared/types'
 import { buildHwpx, nextVersionedHwpxPath } from './services/hwpx'
 import { prepareMedia } from './services/media'
 import { createMediaProtocolHandler } from './services/media-protocol'
@@ -21,11 +20,21 @@ import {
   loadProject,
   projectDirectory,
   projectsRoot,
-  saveProject,
   saveRows,
+  updateProject,
+  snapshotProject,
+  listSnapshots,
+  restoreSnapshot,
+  reviewRows,
+  setProjectConsent,
+  decideCorrection,
   setLocalDiarizationConfig,
   setTranscriptionEngine
 } from './services/project-store'
+import { executeVerifiedAnalysis } from './services/analysis-workflow'
+import { fileSha256 } from './services/file-hash'
+import { generateCorrections } from './services/correction'
+import { getExportGate, resolveExportProvenance, validateExportArtifact } from './services/export-workflow'
 import { appVersion, templatePath } from './services/runtime'
 import { buildLocalDiagnosticReport } from './services/diagnostics'
 import { classifyProcessFailure, LocalProcessingError, sanitizeDiagnosticText } from './services/processing-errors'
@@ -69,19 +78,78 @@ async function processProject(id: string): Promise<ScriptProject> {
 
   const controller = new AbortController()
   activeJobs.set(id, controller)
-  const project = await loadProject(id)
-  const engine = project.transcriptionEngine ?? 'openai'
-  const localDiarization = project.localDiarization ?? { mode: 'none', speakerCount: null }
-  const run: ProcessingRun = {
-    id: randomUUID(),
-    startedAt: new Date().toISOString(),
-    provider: engine,
-    model: engine === 'local' ? LOCAL_ENGINE_VERSION : OPENAI_MODEL
+  try {
+    const project = await loadProject(id)
+    const result = await executeVerifiedAnalysis(id, {
+      store: { update: updateProject, snapshot: snapshotProject },
+      model: project.transcriptionEngine === 'openai' ? OPENAI_MODEL : LOCAL_ENGINE_VERSION,
+      signal: controller.signal,
+      analyze: (draft, run) => produceDraft(id, draft, run, controller),
+      describeFailure: (error) => error instanceof Error ? error.message : '분석을 완료하지 못했습니다.'
+    })
+    sendProgress({ projectId: id, stage: 'complete', percent: 100, message: '초안이 준비되었습니다. 영상을 보며 확인해 주세요.' })
+    return result
+  } finally {
+    activeJobs.delete(id)
   }
-  project.runs.push(run)
-  project.status = 'processing'
-  delete project.lastError
-  await saveProject(project)
+}
+
+function assertProjectIdle(id: string): void {
+  if (activeJobs.has(id)) throw new Error('이 프로젝트의 작업이 끝난 뒤 다시 시도해 주세요.')
+}
+
+async function withProjectJob<T>(id: string, action: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  assertProjectIdle(id)
+  const controller = new AbortController()
+  activeJobs.set(id, controller)
+  try { return await action(controller.signal) } finally { activeJobs.delete(id) }
+}
+
+async function exportProject(id: string, format: 'hwpx' | 'srt'): Promise<{ path: string; format: 'hwpx' | 'srt' } | null> {
+  return withProjectJob(id, async () => {
+    const project = await loadProject(id)
+    const gate = getExportGate(project, format)
+    if (gate.errors.length) throw new Error(gate.errors[0])
+    const pendingCount = project.workflow?.proposals.filter((proposal) => proposal.status === 'pending').length ?? 0
+    if (gate.unreviewedCount || pendingCount) {
+      const answer = await dialog.showMessageBox(mainWindow!, {
+        type: 'warning', title: '아직 확인하지 않은 내용이 있습니다',
+        message: `확인 전 ${gate.unreviewedCount}개 구간 · 미결정 교정 제안 ${pendingCount}개`,
+        detail: '자동 검사는 내용의 정확성을 보장하지 않습니다. 검수를 계속하거나, 현재 내용을 작업용 파일로 저장할 수 있습니다. SRT에는 대사만 포함됩니다.',
+        buttons: ['검수로 돌아가기', '현재 내용으로 저장'], defaultId: 0, cancelId: 0, noLink: true
+      })
+      if (answer.response !== 1) return null
+    }
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: `${format.toUpperCase()} 저장 폴더 선택`, defaultPath: join(projectsRoot(), '..', 'Exports'), properties: ['openDirectory', 'createDirectory']
+    })
+    if (result.canceled) return null
+    await snapshotProject(project, `${format.toUpperCase()} 저장 전`)
+    let outputPath: string
+    if (format === 'hwpx') {
+      outputPath = await nextVersionedHwpxPath(result.filePaths[0], project.title)
+      await buildHwpx({ templatePath: await templatePath(), outputPath, title: project.title, rows: project.rows })
+    } else {
+      outputPath = (await buildAndWriteSrt({ outputDirectory: result.filePaths[0], projectTitle: project.title, rows: project.rows, includeSpeakerLabels: supportsSpeakerLabels(project) })).path
+    }
+    const sha256 = await validateExportArtifact(outputPath, format, project)
+    await updateProject(id, (live) => {
+      if (live.workflow!.revision !== project.workflow!.revision) throw new Error('저장 중 대본이 변경되었습니다. 다시 저장해 주세요.')
+      live.status = 'exported'
+      const exportedAt = new Date().toISOString()
+      live.exports.push({ path: outputPath, exportedAt, appVersion: appVersion(), format, sha256,
+        workflowRevision: project.workflow!.revision, unreviewedCount: gate.unreviewedCount,
+        ...resolveExportProvenance(project, format) })
+      live.workflow!.events.push({ id: randomUUID(), at: exportedAt, action: 'export-completed', actor: 'writer', detail: `${format.toUpperCase()} · SHA-256 ${sha256}` })
+    })
+    shell.showItemInFolder(outputPath)
+    return { path: outputPath, format }
+  })
+}
+
+async function produceDraft(id: string, project: ScriptProject, run: ProcessingRun, controller: AbortController): Promise<void> {
+  const engine = project.transcriptionEngine ?? 'local'
+  const localDiarization = project.localDiarization ?? { mode: 'none', speakerCount: null }
 
   const progress = (value: Omit<ProcessingProgress, 'projectId'>): void => sendProgress({ projectId: id, ...value })
   let apiKey: string | null = null
@@ -111,7 +179,8 @@ async function processProject(id: string): Promise<ScriptProject> {
     }
     progress({ stage: 'preparing', percent: 3, message: '프로젝트를 준비하고 있습니다.' })
     await prepareMedia({ project, projectDirectory: await projectDirectory(id), engine, signal: controller.signal, progress })
-    await saveProject(project)
+    run.inputSha256 = project.source.sha256
+    run.audioSha256 = await fileSha256(project.media.audioPath!, controller.signal)
     let modelPath: string | undefined
     if (engine === 'local') {
       try {
@@ -150,7 +219,11 @@ async function processProject(id: string): Promise<ScriptProject> {
       audioPath: project.media.audioPath!,
       language: 'ko',
       durationMs: project.media.durationMs,
-      signal: controller.signal
+      signal: controller.signal,
+      onRetry: (message: string) => {
+        run.requestAttempts = (run.requestAttempts ?? 1) + 1
+        progress({ stage: 'transcribing', percent: 60, message })
+      }
     }
     if (engine === 'local') {
       const localProvider = new LocalWhisperTranscriptionProvider(modelPath!)
@@ -237,16 +310,12 @@ async function processProject(id: string): Promise<ScriptProject> {
         })
       }
     } else {
+      run.requestAttempts = 1
+      run.retryLimit = 1
       project.segments = await new OpenAiTranscriptionProvider(apiKey!).transcribe(transcriptionRequest)
     }
     progress({ stage: 'building', percent: engine === 'local' && localDiarization.mode === 'sherpa-onnx' ? 97 : 88, message: '대사와 해설 구간을 구성하고 있습니다.' })
-    project.rows = generateScriptRows(project.segments, project.media.durationMs)
-    project.status = 'review'
-    run.completedAt = new Date().toISOString()
     run.modelIntegrity = modelIntegrity
-    await saveProject(project)
-    progress({ stage: 'complete', percent: 100, message: '검수할 준비가 되었습니다.' })
-    return project
   } catch (error) {
     const transcriptionFailure = error instanceof TranscriptionFailure ? error : null
     const aborted = controller.signal.aborted || transcriptionFailure?.code === 'OPENAI_ABORTED' || (error instanceof DOMException && error.name === 'AbortError')
@@ -277,10 +346,7 @@ async function processProject(id: string): Promise<ScriptProject> {
     run.apiDetail = transcriptionFailure?.apiDetail
     run.openaiRequest = transcriptionFailure?.requestInfo
     run.openaiAudio = transcriptionFailure?.audioInfo
-    await saveProject(project)
     throw new Error(project.lastError)
-  } finally {
-    activeJobs.delete(id)
   }
 }
 
@@ -330,61 +396,53 @@ function registerIpc(): void {
 
   ipcMain.handle('project:create', (_event, input: CreateProjectInput) => createProject(input))
   ipcMain.handle('project:load', (_event, id: string) => loadProject(id))
-  ipcMain.handle('project:save-rows', (_event, id: string, rows: ScriptRow[]) => saveRows(id, rows))
-  ipcMain.handle('project:set-engine', (_event, id: string, engine: TranscriptionEngine) => setTranscriptionEngine(id, engine))
-  ipcMain.handle('project:set-local-diarization', (_event, id: string, config: LocalDiarizationConfig) => setLocalDiarizationConfig(id, config))
+  ipcMain.handle('project:save-rows', (_event, id: string, rows: ScriptRow[], revision?: number) => { assertProjectIdle(id); return saveRows(id, rows, revision) })
+  ipcMain.handle('project:set-engine', (_event, id: string, engine: TranscriptionEngine) => { assertProjectIdle(id); return setTranscriptionEngine(id, engine) })
+  ipcMain.handle('project:set-local-diarization', (_event, id: string, config: LocalDiarizationConfig) => { assertProjectIdle(id); return setLocalDiarizationConfig(id, config) })
   ipcMain.handle('project:process', (_event, id: string) => processProject(id))
   ipcMain.handle('project:cancel', (_event, id: string) => activeJobs.get(id)?.abort())
-  ipcMain.handle('project:delete', (_event, id: string) => deleteProject(id))
-
-  ipcMain.handle('project:export-hwpx', async (_event, id: string) => {
-    const project = await loadProject(id)
-    const errors = validateRows(project.rows)
-    if (errors.length > 0) throw new Error(errors[0])
-    if (project.rows.length === 0) throw new Error('내보낼 대본 행이 없습니다.')
-    const result = await dialog.showOpenDialog(mainWindow!, {
-      title: 'HWPX 저장 폴더 선택',
-      defaultPath: join(projectsRoot(), '..', 'Exports'),
-      properties: ['openDirectory', 'createDirectory']
-    })
-    if (result.canceled) return null
-    const outputPath = await nextVersionedHwpxPath(result.filePaths[0], project.title)
-    await buildHwpx({ templatePath: await templatePath(), outputPath, title: project.title, rows: project.rows })
-    project.status = 'exported'
-    project.exports.push({ path: outputPath, exportedAt: new Date().toISOString(), appVersion: appVersion() })
-    await saveProject(project)
-    shell.showItemInFolder(outputPath)
-    return { path: outputPath }
+  ipcMain.handle('project:delete', (_event, id: string) => { assertProjectIdle(id); return deleteProject(id) })
+  ipcMain.handle('project:set-consent', (_event, id: string, consent: Parameters<AppApi['setProjectConsent']>[1]) => { assertProjectIdle(id); return setProjectConsent(id, consent) })
+  ipcMain.handle('project:review-rows', (_event, id: string, rowIds: string[], approved: boolean, revision: number) => { assertProjectIdle(id); return reviewRows(id, rowIds, approved, revision) })
+  ipcMain.handle('project:list-snapshots', (_event, id: string) => listSnapshots(id))
+  ipcMain.handle('project:restore-snapshot', (_event, id: string, snapshotId: string, revision: number) => withProjectJob(id, () => restoreSnapshot(id, snapshotId, revision)))
+  ipcMain.handle('project:decide-correction', (_event, id: string, proposalId: string, decision: 'apply' | 'reject', revision: number) => {
+    assertProjectIdle(id); return decideCorrection(id, proposalId, decision, revision)
   })
-
-  ipcMain.handle('project:export-srt', async (_event, id: string) => {
+  ipcMain.handle('project:request-corrections', (_event, id: string, rowIds: string[], revision: number) => withProjectJob(id, async (signal) => {
     const project = await loadProject(id)
-    const errors = validateRows(project.rows)
-    if (errors.length > 0) throw new Error(errors[0])
-    if (!project.rows.some((row) => row.kind === 'dialogue')) throw new Error('내보낼 대사 행이 없습니다.')
-    const result = await dialog.showOpenDialog(mainWindow!, {
-      title: 'SRT 저장 폴더 선택',
-      defaultPath: join(projectsRoot(), '..', 'Exports'),
-      properties: ['openDirectory', 'createDirectory']
+    if (!Number.isInteger(revision) || project.workflow!.revision !== revision) throw new Error('대본이 변경되었습니다. 저장 후 다시 시도해 주세요.')
+    const key = await getApiKey()
+    if (!key) throw new Error('외부 교정을 사용하려면 설정에서 API 키를 등록해 주세요. 직접 수정은 언제든 가능합니다.')
+    const proposals = await generateCorrections(project, rowIds, key, { signal })
+    return updateProject(id, (live) => {
+      if (live.workflow!.revision !== revision) throw new Error('교정 중 대본이 변경되어 제안을 적용하지 않았습니다.')
+      live.workflow!.proposals = live.workflow!.proposals.map((proposal) => proposal.status === 'pending' && rowIds.includes(proposal.rowId) ? { ...proposal, status: 'stale' } : proposal)
+      live.workflow!.proposals.push(...proposals)
+      live.workflow!.events.push({ id: randomUUID(), at: new Date().toISOString(), action: 'correction-proposed', actor: 'system', rowIds, runId: proposals[0]?.runId, detail: `${proposals.length}개 제안 · 내용은 자동 적용되지 않음` })
     })
-    if (result.canceled) return null
-    const output = await buildAndWriteSrt({
-      outputDirectory: result.filePaths[0],
-      projectTitle: project.title,
-      rows: project.rows,
-      includeSpeakerLabels: supportsSpeakerLabels(project)
+  }))
+  ipcMain.handle('project:export-evidence', (_event, id: string) => withProjectJob(id, async () => {
+    const project = await loadProject(id)
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: '검증 기록 저장 — 대사와 수정 이력이 포함된 민감한 자료입니다',
+      defaultPath: 'GiNuNi-검증기록.json', filters: [{ name: 'JSON 검증 기록', extensions: ['json'] }]
     })
-    project.status = 'exported'
-    project.exports.push({
-      path: output.path,
-      exportedAt: new Date().toISOString(),
-      appVersion: appVersion(),
-      format: 'srt'
-    })
-    await saveProject(project)
-    shell.showItemInFolder(output.path)
-    return output
-  })
+    if (result.canceled || !result.filePath) return null
+    const evidence = {
+      format: 'ginuni-evidence-v1', exportedAt: new Date().toISOString(), projectId: project.id,
+      notice: '자동 검사와 해시는 내용의 정확성 또는 법적 권리를 보증하지 않습니다. 로컬 기록이며 전자서명이 아닙니다.',
+      source: { kind: project.source.kind, sha256: project.source.sha256 }, durationMs: project.media.durationMs,
+      rows: project.rows, segments: project.segments, runs: project.runs, workflow: project.workflow,
+      exports: project.exports.map(({ path: _path, ...entry }) => entry)
+    }
+    await writeFile(result.filePath, JSON.stringify(evidence, null, 2), { encoding: 'utf8' })
+    shell.showItemInFolder(result.filePath)
+    return { path: result.filePath }
+  }))
+
+  ipcMain.handle('project:export-hwpx', (_event, id: string) => exportProject(id, 'hwpx'))
+  ipcMain.handle('project:export-srt', (_event, id: string) => exportProject(id, 'srt'))
 
   ipcMain.handle('settings:save-api-key', (_event, key: string) => saveApiKey(key))
   ipcMain.handle('settings:clear-api-key', () => clearApiKey())

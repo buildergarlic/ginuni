@@ -311,18 +311,29 @@ export function normalizeDiarizedResponse(response: unknown): TranscriptSegment[
     return speakerMap.get(raw)!
   }
 
-  return (response.segments as DiarizedSegment[])
-    .filter((segment) => (
-      Number.isFinite(segment.start) &&
-      Number.isFinite(segment.end) &&
-      segment.end! > segment.start! &&
-      Boolean(segment.text?.trim())
-    ))
-    .map((segment) => ({
+  const invalidResponse = (): never => {
+    throw new TranscriptionFailure(
+      'OPENAI_RESPONSE_INVALID',
+      'OpenAI 전사 결과에 올바르지 않은 구간이 포함되어 있습니다. 다시 시도하세요.'
+    )
+  }
+  const segments = response.segments as unknown[]
+  for (const value of segments) {
+    if (!value || typeof value !== 'object') invalidResponse()
+    const segment = value as DiarizedSegment
+    if (
+      typeof segment.start !== 'number' || !Number.isFinite(segment.start) || segment.start < 0 ||
+      typeof segment.end !== 'number' || !Number.isFinite(segment.end) || segment.end <= segment.start ||
+      typeof segment.text !== 'string' || !segment.text.trim() ||
+      (segment.speaker !== undefined && typeof segment.speaker !== 'string')
+    ) invalidResponse()
+  }
+
+  return (segments as DiarizedSegment[]).map((segment) => ({
       id: randomUUID(),
-      startMs: Math.max(0, Math.round(segment.start! * 1000)),
-      endMs: Math.max(0, Math.round(segment.end! * 1000)),
-      speakerId: speakerName(segment.speaker || 'A'),
+      startMs: Math.round(segment.start! * 1000),
+      endMs: Math.round(segment.end! * 1000),
+      speakerId: segment.speaker ? speakerName(segment.speaker) : '',
       text: segment.text!.trim()
     }))
 }
@@ -339,7 +350,8 @@ export class OpenAiTranscriptionProvider implements TranscriptionProvider {
   constructor(private readonly apiKey: string, private readonly injectedClient?: OpenAI) {}
 
   async transcribe(request: TranscriptionRequest): Promise<TranscriptSegment[]> {
-    const client = this.injectedClient ?? new OpenAI({ apiKey: this.apiKey })
+    const client = this.injectedClient ?? new OpenAI({ apiKey: this.apiKey, maxRetries: 0, timeout: 600_000 })
+    const onRetry = (request as TranscriptionRequest & { onRetry?: (reason: string) => void }).onRetry
     const initialRequestInfo: OpenAiRequestInfo = {
       model: OPENAI_MODEL,
       responseFormat: 'diarized_json',
@@ -382,7 +394,7 @@ export class OpenAiTranscriptionProvider implements TranscriptionProvider {
             chunking_strategy: 'auto',
             ...(includeLanguage ? { language: request.language } : {})
           },
-          { signal: request.signal }
+          { signal: request.signal, maxRetries: 0, timeout: 600_000 }
         )
 
         return normalizeDiarizedResponse(response)
@@ -406,6 +418,7 @@ export class OpenAiTranscriptionProvider implements TranscriptionProvider {
       // Some deployments reject the optional language field even though the model
       // supports it. Retry once without that field while preserving diarization.
       if (shouldRetryWithoutLanguage(failure)) {
+        onRetry?.('OpenAI 호환성을 위해 언어 설정 없이 한 번 더 요청합니다.')
         return await send(request.audioPath, false, audioInfo)
       }
 
@@ -414,6 +427,7 @@ export class OpenAiTranscriptionProvider implements TranscriptionProvider {
       if (
         shouldRetryWithAudioFallback(failure, request.audioPath, request.durationMs)
       ) {
+        onRetry?.('OpenAI 호환성을 위해 음성 형식을 변환해 한 번 더 요청합니다.')
         let fallback: { path: string; info: OpenAiAudioInfo }
         try {
           fallback = await reencodeOpenAiAudio(request.audioPath, request.durationMs!, request.signal)

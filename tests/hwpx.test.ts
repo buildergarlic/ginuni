@@ -18,7 +18,7 @@ describe('HWPX export', () => {
     tempDirectory = await mkdtemp(join(tmpdir(), 'screen-script-hwpx-'))
     const outputPath = join(tempDirectory, 'result.hwpx')
     const rows: ScriptRow[] = [
-      { id: 'g', kind: 'descriptionGap', startMs: 0, endMs: 3_000, speakers: [], content: '무시되는 값', sourceSegmentIds: [], reviewed: false },
+      { id: 'g', kind: 'descriptionGap', startMs: 0, endMs: 3_000, speakers: [], content: '문을 열고 여자가 들어온다.', sourceSegmentIds: [], reviewed: false },
       { id: 'd', kind: 'dialogue', startMs: 3_000, endMs: 14_000, speakers: ['화자1'], content: '[화자1] [화자1] <안녕> & 반가워요', sourceSegmentIds: ['s1'], reviewed: true }
     ]
     await buildHwpx({
@@ -42,7 +42,8 @@ describe('HWPX export', () => {
     const content = entries.get('Contents/content.hpf')?.toString('utf8') ?? ''
     expect(content).toContain('name="creator" content="text">화면해설 대본 도구</opf:meta>')
     expect(content).not.toContain('content="화면해설 대본 도구"')
-    expect(entries.get('Preview/PrvText.txt')?.toString('utf8')).toContain('※ (사람 목소리 없음) 해설 삽입 권장 구간')
+    expect(section).toContain('문을 열고 여자가 들어온다.')
+    expect(entries.get('Preview/PrvText.txt')?.toString('utf8')).toContain('문을 열고 여자가 들어온다.')
   })
 
   it('셀 안의 줄바꿈을 HWPX 줄바꿈 요소로 기록한다', async () => {

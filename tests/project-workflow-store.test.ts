@@ -1,0 +1,150 @@
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { beforeEach, afterEach, expect, it, vi } from 'vitest'
+import type { ScriptRow } from '@shared/types'
+const state = vi.hoisted(() => ({ path: '' }))
+vi.mock('electron', () => ({ app: { getPath: () => state.path } }))
+import * as store from '@main/services/project-store'
+beforeEach(async () => { state.path = await mkdtemp(join(tmpdir(), 'workflow-store-')) })
+afterEach(async () => { await rm(state.path, { recursive: true, force: true }) })
+const row = (id = 'r'): ScriptRow => ({ id, kind: 'dialogue', startMs: 0, endMs: 1000, speakers: [], content: '원문', sourceSegmentIds: ['s'], reviewed: false })
+async function fixture() {
+  const p = await store.createProject({ kind: 'local', localPath: 'x.mp4', rightsConfirmed: true })
+  return store.updateProject(p.id, p => { p.media.durationMs = 2000; p.segments = [{ id: 's', startMs: 0, endMs: 1000, speakerId: '', text: '원문' }]; p.rows = [row()] })
+}
+it('serializes concurrent edits and rolls back failed transactions', async () => {
+  const p = await fixture()
+  await Promise.all([store.updateProject(p.id, async p => { await new Promise(r => setTimeout(r, 20)); p.title += 'A' }), store.updateProject(p.id, p => { p.title += 'B' })])
+  await expect(store.updateProject(p.id, p => { p.title = 'lost'; throw Error('rollback') })).rejects.toThrow('rollback')
+  expect((await store.loadProject(p.id)).title).toBe('xAB')
+  expect((await store.loadProject(p.id)).workflow?.revision).toBe(3)
+})
+it('rejects stale saves and renderer approval, resets approvals on edits, and audits deletions', async () => {
+  let p = await fixture()
+  p = await store.saveRows(p.id, [{ ...row(), reviewed: true, reviewStatus: 'approved', approvedAt: 'forged' }], p.workflow!.revision)
+  expect(p.rows[0].reviewStatus).toBe('unreviewed')
+  p = await store.reviewRows(p.id, ['r'], true, p.workflow!.revision)
+  expect(p.rows[0].approvedAt).toBeTruthy()
+  await expect(store.saveRows(p.id, [row()], 0)).rejects.toThrow(/revision|다시|변경/)
+  p = await store.saveRows(p.id, [{ ...p.rows[0], content: '편집' }], p.workflow!.revision)
+  expect(p.rows[0].reviewStatus).toBe('unreviewed')
+  p = await store.saveRows(p.id, [], p.workflow!.revision)
+  expect(p.workflow!.events.at(-1)?.changes?.[0].before?.content).toBe('편집')
+  expect(p.segments[0].text).toBe('원문')
+})
+it('rejects malformed rows but persists temporary finite invalid timing for review', async () => {
+  const p = await fixture()
+  await expect(store.saveRows(p.id, [{ ...row(), startMs: NaN }])).rejects.toThrow()
+  const saved = await store.saveRows(p.id, [{ ...row(), startMs: -1, endMs: -2 }])
+  expect(saved.rows[0].endMs).toBe(-2)
+})
+it('retains ten snapshots, restores rows without deleting newer source evidence and snapshots before restore', async () => {
+  let p = await fixture()
+  const first = await store.snapshotProject(p, 'first')
+  p = await store.updateProject(p.id, p => { p.rows[0].content = 'new'; p.runs.push({ id: 'new-run', provider: 'local', model: 'x', startedAt: '' }) })
+  p = await store.restoreSnapshot(p.id, first.id, p.workflow!.revision)
+  expect(p.rows[0].content).toBe('원문')
+  expect(p.runs[0].id).toBe('new-run')
+  expect((await store.listSnapshots(p.id)).some(s => s.reason === 'before-restore')).toBe(true)
+  for (let i = 0; i < 11; i++) await store.snapshotProject(p, `save-${i}`)
+  expect(await store.listSnapshots(p.id)).toHaveLength(10)
+})
+it('refuses stale correction application and applies only the proposed text with audit', async () => {
+  let p = await fixture()
+  p = await store.updateProject(p.id, p => { p.workflow!.proposals.push({ id: 'c', rowId: 'r', before: '원문', after: '수정', reason: '', status: 'pending', createdAt: '', model: 'm', promptVersion: 'v', runId: 'run' }) })
+  p = await store.decideCorrection(p.id, 'c', 'apply', p.workflow!.revision)
+  expect(p.rows[0].content).toBe('수정')
+  expect(p.rows[0].sourceSegmentIds).toEqual(['s'])
+  expect(await store.listSnapshots(p.id)).toHaveLength(1)
+  await expect(store.decideCorrection(p.id, 'c', 'apply', p.workflow!.revision)).rejects.toThrow()
+})
+it('invalidates pending proposals when source timing changes even if text stays equal', async () => {
+  let p = await fixture()
+  p = await store.updateProject(p.id, p => { p.workflow!.proposals.push({ id: 'c', rowId: 'r', before: '원문', after: '수정', reason: '', status: 'pending', createdAt: '', model: 'm', promptVersion: 'v', runId: 'run' }) })
+  p = await store.saveRows(p.id, [{ ...row(), startMs: 100 }], p.workflow!.revision)
+  expect(p.workflow!.proposals[0].status).toBe('stale')
+  await expect(store.decideCorrection(p.id, 'c', 'apply', p.workflow!.revision)).rejects.toThrow()
+})
+it('rejects missing revisions for explicit approvals', async () => {
+  const p = await fixture()
+  await expect(store.reviewRows(p.id, ['r'], true, undefined as unknown as number)).rejects.toThrow()
+})
+it('snapshots bulk deletion and restores approval only against matching source evidence', async () => {
+  let p = await fixture()
+  p = await store.updateProject(p.id, p => { p.rows = Array.from({ length: 10 }, (_, i) => row(`r${i}`)) })
+  p = await store.saveRows(p.id, [], p.workflow!.revision)
+  const snapshots = await store.listSnapshots(p.id)
+  expect(snapshots).toHaveLength(1)
+  p = await store.updateProject(p.id, p => { p.segments[0].text = 'new evidence' })
+  p = await store.restoreSnapshot(p.id, snapshots[0].id, p.workflow!.revision)
+  expect(p.rows).toHaveLength(10)
+  expect(p.segments[0].text).toBe('new evidence')
+  expect(p.rows.every(r => !r.reviewed)).toBe(true)
+})
+it('records consent timestamps from the server and audits only known boolean fields', async () => {
+  const p = await fixture()
+  const saved = await store.setProjectConsent(p.id, { rightsConfirmed: true, cloudAudioConsent: true, cloudCorrectionConsent: false, secret: 'DO-NOT-LOG' } as Parameters<typeof store.setProjectConsent>[1])
+  expect(saved.workflow!.consent.cloudAudioConsentAt).toMatch(/^\d{4}-/)
+  expect(JSON.stringify(saved.workflow!.events)).not.toContain('DO-NOT-LOG')
+  const revoked = await store.setProjectConsent(p.id, { rightsConfirmed: false, cloudAudioConsent: false, cloudCorrectionConsent: false })
+  expect(revoked.workflow!.consent.cloudAudioConsentAt).toBeUndefined()
+})
+it('blocks approval of invalid rows without advancing revision or changing approval', async () => {
+  let p = await fixture()
+  p = await store.saveRows(p.id, [{ ...row(), endMs: -1 }], p.workflow!.revision)
+  await expect(store.reviewRows(p.id, ['r'], true, p.workflow!.revision)).rejects.toThrow()
+  const loaded = await store.loadProject(p.id)
+  expect(loaded.workflow!.revision).toBe(p.workflow!.revision)
+  expect(loaded.rows[0].reviewed).toBe(false)
+})
+it('restores archived source rows after reanalysis and invalidates pending proposals against changed evidence', async () => {
+  let p = await fixture()
+  p = await store.updateProject(p.id, p => { p.workflow!.proposals.push({ id: 'c', rowId: 'r', before: '원문', after: '수정', reason: '', status: 'pending', createdAt: '', model: 'm', promptVersion: 'v', runId: 'run' }) })
+  const snapshot = await store.snapshotProject(p, 'before-rerun')
+  p = await store.updateProject(p.id, p => { p.runs.push({ id: 'old', startedAt: '', provider: 'local', model: 'm', sourceSegments: p.segments }); p.segments = [{ id: 'new', startMs: 0, endMs: 1000, text: '새 인식', speakerId: '' }] })
+  p = await store.restoreSnapshot(p.id, snapshot.id, p.workflow!.revision)
+  expect(p.rows[0].sourceSegmentIds).toEqual(['s'])
+  expect(p.workflow!.proposals[0].status).toBe('stale')
+  expect(p.runs[0].sourceSegments?.[0].text).toBe('원문')
+})
+it('rejects malformed current project workflow with a clear data error', async () => {
+  const p = await fixture()
+  const directory = await store.projectDirectory(p.id)
+  await writeFile(join(directory, 'project.json'), JSON.stringify({ ...p, workflow: { version: 1, revision: -1 } }))
+  await expect(store.loadProject(p.id)).rejects.toThrow(/데이터/)
+})
+it('rejects sparse nested arrays before persistence and revision advancement', async () => {
+  const p = await fixture()
+  for (const field of ['speakers', 'sourceSegmentIds'] as const) {
+    await expect(store.saveRows(p.id, [{ ...row(), [field]: new Array(1) }], p.workflow!.revision)).rejects.toThrow()
+    const loaded = await store.loadProject(p.id)
+    expect(loaded.workflow!.revision).toBe(p.workflow!.revision)
+    expect(loaded.rows[0].content).toBe('원문')
+  }
+})
+it('isolates corrupt snapshot neighbors while retaining evidence and restoring healthy state', async () => {
+  let p = await fixture()
+  const healthy = await store.snapshotProject(p, 'healthy')
+  const directory = join(await store.projectDirectory(p.id), 'snapshots')
+  const corruptId = '00000000-0000-0000-0000-000000000001'
+  const invalidId = '00000000-0000-0000-0000-000000000002'
+  await writeFile(join(directory, `${corruptId}.json`), '{truncated')
+  await writeFile(join(directory, `${invalidId}.json`), JSON.stringify({ id: invalidId, createdAt: 42, reason: 'bad', rowCount: 1 }))
+  expect(await store.listSnapshots(p.id)).toEqual([healthy])
+  p = await store.updateProject(p.id, p => { p.rows[0].content = 'new' })
+  p = await store.restoreSnapshot(p.id, healthy.id, p.workflow!.revision)
+  expect(p.rows[0].content).toBe('원문')
+  await expect(store.restoreSnapshot(p.id, corruptId, p.workflow!.revision)).rejects.toThrow(/복구.*손상|손상.*복구/)
+  await expect(store.restoreSnapshot(p.id, invalidId, p.workflow!.revision)).rejects.toThrow(/복구.*손상|손상.*복구/)
+  expect(await readFile(join(directory, `${corruptId}.json`), 'utf8')).toBe('{truncated')
+})
+it('retains the latest ten snapshots deterministically when the clock does not advance', async () => {
+  const p = await fixture()
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-09-09T00:00:00.000Z'))
+  try {
+    for (let i = 0; i < 12; i++) await store.snapshotProject(p, `sequence-${i}`)
+    expect((await store.listSnapshots(p.id)).map(s => s.reason)).toEqual(['sequence-11', 'sequence-10', 'sequence-9', 'sequence-8', 'sequence-7', 'sequence-6', 'sequence-5', 'sequence-4', 'sequence-3', 'sequence-2'])
+  } finally { vi.useRealTimers() }
+})
