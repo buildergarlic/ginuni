@@ -5,7 +5,7 @@ import { validateRows } from '@shared/rows'
 import { rowReviewStatus } from '@shared/workflow'
 import { Add20Regular, ArrowLeft20Regular, ArrowRight20Regular, ArrowUndo20Regular, ArrowExportUp20Regular, CheckmarkCircle20Regular, ChevronDown20Regular, ChevronRight20Regular, Dismiss20Regular, Document20Regular, Folder20Regular, Heart20Regular, Info20Regular, Play20Regular, Settings20Regular, Subtract20Regular, Video20Regular } from '@fluentui/react-icons'
 import { WorkflowPanel } from './WorkflowPanel'
-import { nextUnreviewedRow } from './review-navigation'
+import { nextUnreviewedRow, scrollTopToRevealRow } from './review-navigation'
 import { GuideScreen } from './GuideScreen'
 import { inspectInlineDraft, prepareEditedRows, savePendingEdits, scheduleDraftSave } from './workflow-editing'
 import { createYouTubeSeekController, youtubeApiMessage } from './youtube-seek'
@@ -888,6 +888,10 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
     toolsDialogRef.current?.showModal()
   }
   const mediaRef = useRef<MediaHandle>(null)
+  const scriptViewportRef = useRef<HTMLDivElement>(null)
+  const scriptHeadingRef = useRef<HTMLTableSectionElement>(null)
+  const selectedRowRef = useRef<HTMLTableRowElement>(null)
+  const reviewFooterRef = useRef<HTMLElement>(null)
   const inlineContentRef = useRef<HTMLTextAreaElement | null>(null)
   const rowsRef = useRef(project.rows)
   const editVersionRef = useRef(0)
@@ -1076,6 +1080,43 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
     if (!inlineDraft || inlineDraft.rowId !== selectedId) return
     requestAnimationFrame(() => resizeInlineContentEditor())
   }, [inlineDraft?.content, inlineDraft?.rowId, selectedId, resizeInlineContentEditor, reviewFontSize])
+  useEffect(() => {
+    // Run after the selected editor has resized, and only when the selection changes.
+    // Prefer container scrolling, preserving footer focus and any already-readable page position.
+    const frame = requestAnimationFrame(() => {
+      const viewport = scriptViewportRef.current
+      const row = selectedRowRef.current
+      if (!viewport || !row) return
+      const measureViewport = () => {
+        const top = viewport.getBoundingClientRect().top + viewport.clientTop
+        // A compact page can show only part of the table above its sticky footer.
+        const bottom = Math.min(top + viewport.clientHeight, window.innerHeight, reviewFooterRef.current?.getBoundingClientRect().top ?? window.innerHeight)
+        return { top, height: bottom - top, heading: Math.max(scriptHeadingRef.current?.getBoundingClientRect().height ?? 0, -top) }
+      }
+      let visible = measureViewport()
+      const editor = inlineContentRef.current
+      const initialRowBounds = row.getBoundingClientRect()
+      const editorBounds = editor?.getBoundingClientRect()
+      const lineHeight = editor ? Number.parseFloat(window.getComputedStyle(editor).lineHeight) : 0
+      const readableRowHeight = editorBounds
+        ? editorBounds.top - initialRowBounds.top + Math.min(editorBounds.height, Math.max(65, lineHeight * 2)) + 8
+        : initialRowBounds.height
+      // A second measurement accounts for the footer reaching its sticky position.
+      for (let attempt = 0; attempt < 2 && !toolsDialogRef.current?.open; attempt += 1) {
+        const deficit = visible.heading + readableRowHeight - visible.height
+        if (deficit <= 0) break
+        // Only move the page when its compact layout leaves too little room to read.
+        window.scrollBy({ top: deficit, behavior: 'instant' })
+        visible = measureViewport()
+      }
+      const rowBounds = row.getBoundingClientRect()
+      const rowTop = rowBounds.top - visible.top + viewport.scrollTop
+      if (visible.height > visible.heading) {
+        viewport.scrollTop = scrollTopToRevealRow(viewport.scrollTop, visible.height, rowTop, rowBounds.height, visible.heading)
+      }
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [selectedId])
   const selectRow = (row: ScriptRow): void => {
     setSelectedId(row.id)
     const draft = loadDraftFromRow(row)
@@ -1618,9 +1659,9 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
               </ul>
             </div>
           )}
-          <div className="table-wrap">
+          <div className="table-wrap" ref={scriptViewportRef}>
             <table className="script-table">
-              <thead><tr><th>시작 – 종료</th><th>분류</th><th>대사 / 화면해설</th><th>검수 상태</th></tr></thead>
+              <thead ref={scriptHeadingRef}><tr><th>시작 – 종료</th><th>분류</th><th>대사 / 화면해설</th><th>검수 상태</th></tr></thead>
               <tbody>
                 {rows.map((row) => (
                   (() => {
@@ -1629,6 +1670,7 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
                     return (
                       <tr
                         key={row.id}
+                        ref={selectedId === row.id ? selectedRowRef : undefined}
                         tabIndex={editingBlocked ? -1 : 0}
                         aria-label={`${row.kind === 'dialogue' ? '대사' : '해설'} ${formatTimecode(row.startMs)} ${pendingDraft && draftRow?.id === row.id ? '수정 중 · 확인 전' : rowReviewStatus(row) === 'approved' ? '확인 완료' : '확인 필요'}`}
                         onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); chooseRow(row) } }}
@@ -1725,7 +1767,7 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
             )}
             {rows.length === 0 && <div className="empty-table">아직 분석된 대본이 없습니다. 음성 분석 시작 버튼으로 대사 초안을 준비하세요.</div>}
           </div>
-          <footer className="review-footer">
+          <footer className="review-footer" ref={reviewFooterRef}>
             <p role="status"><Info20Regular aria-hidden="true" />{!rows.length ? '음성을 분석한 뒤 대본을 확인할 수 있어요.' : pendingDraft ? '수정한 내용을 다시 확인해야 해요.' : remainingCount === 0 ? '모든 행을 확인했어요. 대본을 내보낼 수 있어요.' : visibleSelected && rowReviewStatus(visibleSelected) === 'approved' ? '이 행은 확인했어요. 다음 구간으로 이동하세요.' : '영상을 듣고 이 행을 확인해 주세요.'}</p>
             <div className="review-footer-actions">
               <button className="secondary-button" disabled={editingBlocked || !history.length} onClick={undo}><ArrowUndo20Regular aria-hidden="true" />실행 취소</button>
