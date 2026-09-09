@@ -31,6 +31,29 @@ afterEach(async () => {
 })
 
 describe('prepareMedia 검증', () => {
+  it.each([
+    ['오늘의 "특별한" 이야기', '오늘의 특별한 이야기'],
+    ['“오늘”의 ”특별한“ 이야기', '오늘의 특별한 이야기'],
+    ["작가의 '이야기' 1편!", "작가의 '이야기' 1편!"],
+    ['  "“”"  ', '유튜브 영상']
+  ])('유튜브 자동 프로젝트 제목의 큰따옴표를 제거한다: %s', async (videoTitle, expectedTitle) => {
+    processState.runProcess.mockImplementation(async (executable: string, args: string[]) => {
+      if (executable === 'yt-dlp' && args.includes('--dump-single-json')) {
+        return { stdout: JSON.stringify({ id: 'video', title: videoTitle, duration: 60 }), stderr: '', exitCode: 0 }
+      }
+      if (executable === 'yt-dlp') await writeFile(join(directory, 'media', 'youtube-source.webm'), 'source')
+      if (executable === 'ffmpeg') await writeFile(args.at(-1)!, 'encoded')
+      return { stdout: JSON.stringify({ format: { duration: '60' }, streams: [{ codec_type: 'audio' }] }), stderr: '', exitCode: 0 }
+    })
+    const input = project({ kind: 'youtube', uri: 'https://youtu.be/video', displayName: '유튜브 영상' })
+    input.title = '유튜브 영상' // The existing creation fallback when the title field is blank.
+
+    const result = await prepareMedia({ project: input, projectDirectory: directory, engine: 'local', progress: () => undefined })
+
+    expect(result.title).toBe(expectedTitle)
+    expect(result.source.displayName).toBe(videoTitle) // Keep the original source metadata intact.
+  })
+
   it('내려받은 유튜브 원본의 SHA-256을 인코딩 전에 기록한다', async () => {
     const sourceBytes = Buffer.from('downloaded-source')
     processState.runProcess.mockImplementation(async (executable: string, args: string[]) => {

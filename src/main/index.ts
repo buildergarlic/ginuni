@@ -60,7 +60,7 @@ const activeJobs = new Map<string, AbortController>()
 const EXTERNAL_URLS: Readonly<Record<ExternalLinkTarget, string>> = {
   repository: 'https://github.com/buildergarlic/ginuni',
   sponsor: 'https://github.com/sponsors/buildergarlic',
-  threads: 'https://www.threads.com/@builder.garlic',
+  threads: 'https://www.threads.com/@buildergarlic',
   email: 'mailto:contact@ax4u.kr',
   kakao: 'https://open.kakao.com/o/s7eFbFIi'
 }

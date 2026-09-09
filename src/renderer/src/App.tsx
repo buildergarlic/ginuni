@@ -1,9 +1,10 @@
-import { type MouseEvent as ReactMouseEvent, forwardRef, type ReactElement, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { type MouseEvent as ReactMouseEvent, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { DESCRIPTION_TEXT } from '@shared/constants'
 import { formatTimecode } from '@shared/timecode'
 import { validateRows } from '@shared/rows'
 import { rowReviewStatus } from '@shared/workflow'
 import { WorkflowPanel } from './WorkflowPanel'
+import { GuideScreen } from './GuideScreen'
 import { inspectInlineDraft, prepareEditedRows, savePendingEdits, scheduleDraftSave } from './workflow-editing'
 import { createYouTubeSeekController, youtubeApiMessage } from './youtube-seek'
 import { supportsSpeakerLabels as projectSupportsSpeakerLabels } from '@shared/speaker-labels'
@@ -773,7 +774,7 @@ function AboutScreen({ bootstrap, updateStatus, onBack, onSupport, onCheckUpdate
           <section>
             <h2>개발자</h2>
             <strong>BuilderGarlic</strong>
-            <p>Threads @builder.garlic에서 개발 과정과 활용 사례를 공유합니다.</p>
+            <p>Threads @buildergarlic에서 개발 과정과 활용 사례를 공유합니다.</p>
           </section>
           <section>
             <h2>프로그램 문의</h2>
@@ -830,130 +831,6 @@ function SupportScreen({ bootstrap, onBack, onAbout }: {
   )
 }
 
-const guideSteps = [
-  {
-    title: '1) 프로젝트 만들기',
-    detail: '왼쪽의 “새 대본 만들기”에서 로컬 영상 파일을 선택하거나 유튜브 링크를 붙여넣으세요. 기본은 로컬 분석(API 키 없음)입니다.',
-    imageTitle: '입력 화면'
-  },
-  {
-    title: '2) 분석 시작',
-    detail: '분석 버튼을 누르면 음성 전사가 끝난 뒤 타임코드가 붙은 행이 생성됩니다. OpenAI를 쓰려면 설정에서 키를 저장하고 모드를 변경하세요.',
-    imageTitle: '분석 진행'
-  },
-  {
-    title: '3) 검수 화면 사용',
-    detail: '표의 행을 클릭하면 영상이 해당 구간으로 이동합니다. 시작·종료는 MM:SS로 수정하고, 줄바꿈은 그대로 유지됩니다. 텍스트/분할/병합/삭제는 즉시 가능합니다.',
-    imageTitle: '검수와 동기화'
-  },
-  {
-    title: '4) “시간 오류” 처리',
-    detail: '오른쪽 상단에 “시간 오류 n개”가 뜨면 HWPX/SRT 내보내기가 비활성됩니다. 오류 항목을 클릭해 바로 해당 행으로 이동하고 시간 범위를 수정하세요.',
-    imageTitle: '오류로 바로 이동'
-  },
-  {
-    title: '5) 결과 저장',
-    detail: '문제없는 행만 남으면 HWPX와 SRT로 각각 내보내기 할 수 있습니다. 동일 폴더에서 V01, V02처럼 버전이 늘어납니다.',
-    imageTitle: '내보내기'
-  }
-] as const
-
-function guideVisual(label: string): ReactElement {
-  if (label === '입력 화면') {
-    return (
-      <svg viewBox="0 0 640 170" className="guide-svg" role="img" aria-label="입력 화면 안내">
-        <rect x="14" y="18" width="612" height="136" rx="12" fill="#f8faf8" stroke="#cbd7d3" />
-        <rect x="30" y="34" width="220" height="44" fill="#fff" stroke="#9bb7b0" />
-        <text x="42" y="58" fill="#3f5852" fontSize="14">새 대본 만들기</text>
-        <circle cx="560" cy="56" r="14" fill="#a23f33" />
-        <text x="553" y="60" fill="#fff" fontSize="12">+</text>
-        <rect x="30" y="90" width="560" height="48" fill="#eef5f2" stroke="#c8d5d0" />
-        <text x="42" y="118" fill="#49625d" fontSize="13">영상 선택 / 유튜브 링크 입력</text>
-        <text x="40" y="150" fill="#6d7d78" fontSize="11">처음 사용자는 로컬 분석(기본)으로 시작</text>
-      </svg>
-    )
-  }
-  if (label === '분석 진행') {
-    return (
-      <svg viewBox="0 0 640 170" className="guide-svg" role="img" aria-label="분석 진행 안내">
-        <rect x="14" y="18" width="612" height="136" rx="12" fill="#f3f9f3" stroke="#c9d8d2" />
-        <rect x="30" y="36" width="370" height="26" fill="#ffffff" stroke="#bfcfc9" />
-        <rect x="30" y="74" width="300" height="26" fill="#e8f2ed" stroke="#a1c2b6" />
-        <text x="40" y="54" fill="#3f5852" fontSize="12">영상 처리 중</text>
-        <text x="40" y="91" fill="#3f5852" fontSize="12">전사·행 구성</text>
-        <rect x="460" y="36" width="118" height="44" rx="8" fill="#f3b64d" />
-        <text x="483" y="65" fill="#233c35" fontSize="12">진행률</text>
-      </svg>
-    )
-  }
-  if (label === '검수와 동기화') {
-    return (
-      <svg viewBox="0 0 640 170" className="guide-svg" role="img" aria-label="검수와 동기화 안내">
-        <rect x="14" y="18" width="612" height="136" rx="12" fill="#f4f9f6" stroke="#cbd9d4" />
-        <rect x="30" y="36" width="340" height="88" fill="#fff" stroke="#d2ded9" />
-        <line x1="30" y1="90" x2="370" y2="90" stroke="#d5e1dc" strokeWidth="2" />
-        <rect x="404" y="34" width="206" height="90" fill="#132f29" rx="8" />
-        <polygon points="404,74 374,74 390,64 390,84" fill="#132f29" />
-        <rect x="432" y="57" width="140" height="16" fill="#3f6f65" />
-        <text x="446" y="69" fill="#eaf3ef" fontSize="12">유튜브 동기화</text>
-      </svg>
-    )
-  }
-  if (label === '오류로 바로 이동') {
-    return (
-      <svg viewBox="0 0 640 170" className="guide-svg" role="img" aria-label="시간 오류 바로 이동 안내">
-        <rect x="14" y="18" width="612" height="136" rx="12" fill="#fff7f5" stroke="#e0c3be" />
-        <text x="32" y="52" fill="#8d3d34" fontSize="14">시간 오류 2개</text>
-        <rect x="28" y="64" width="230" height="28" fill="#ffd6cd" stroke="#e1a196" />
-        <text x="36" y="83" fill="#7b2921" fontSize="11">1행: 시간이 겹칩니다</text>
-        <rect x="280" y="64" width="230" height="28" fill="#ffd6cd" stroke="#e1a196" />
-        <text x="288" y="83" fill="#7b2921" fontSize="11">3행: 시작/종료 역전</text>
-        <text x="38" y="118" fill="#5f5a58" fontSize="11">오류 항목의 [행으로 이동] 버튼을 눌러 바로 수정</text>
-      </svg>
-    )
-  }
-  return (
-    <svg viewBox="0 0 640 170" className="guide-svg" role="img" aria-label="내보내기 안내">
-      <rect x="14" y="18" width="612" height="136" rx="12" fill="#f8faf8" stroke="#c5d1cc" />
-      <rect x="28" y="40" width="220" height="30" fill="#eaf5ee" stroke="#a8c9be" />
-      <rect x="268" y="40" width="220" height="30" fill="#eaf5ee" stroke="#a8c9be" />
-      <text x="52" y="60" fill="#2d5c4f" fontSize="12">HWPX 내보내기</text>
-      <text x="295" y="60" fill="#2d5c4f" fontSize="12">SRT 내보내기</text>
-      <rect x="28" y="90" width="460" height="34" fill="#e4e1d5" stroke="#cec7b4" />
-      <text x="42" y="112" fill="#574f42" fontSize="12">버전은 V01, V02… 자동 증가합니다</text>
-    </svg>
-  )
-}
-
-function GuideScreen({ onBack }: { onBack: () => void }) {
-  return (
-    <main className="info-page guide-page">
-      <button className="back-button" onClick={onBack}>← 돌아가기</button>
-      <section className="guide-card">
-        <span className="eyebrow">USER GUIDE</span>
-        <h1>GiNuNi 사용법</h1>
-        <p className="info-lead">
-          이 화면은 처음 사용하는 분도 바로 시작할 수 있도록 “프로젝트 생성 → 분석 → 검수 → 내보내기” 과정을 단계별로 보여줍니다.
-          어려운 용어는 아래 단계 설명에서 피해서 정리했습니다.
-        </p>
-        <div className="guide-list">
-          {guideSteps.map((step) => (
-            <article key={step.title} className="guide-step-card">
-              <h2>{step.title}</h2>
-              <p>{step.detail}</p>
-              <div className="guide-image">{guideVisual(step.imageTitle)}</div>
-              <small>{step.imageTitle}</small>
-            </article>
-          ))}
-        </div>
-        <p className="guide-note">
-          <strong>팁</strong>: 시간 오류가 있을 때는 내보내기가 잠깐 멈춥니다. 오류 항목을 누르면 수정 화면으로 바로 이동해서 시작/종료를 바로잡을 수 있습니다.
-          유튜브의 2차원/제한 영상은 보안 경고가 생길 수 있으니 “현재 위치로 이동”이 동작하는지 먼저 확인하세요.
-        </p>
-      </section>
-    </main>
-  )
-}
 
 type InlineRowDraft = {
   rowId: string
@@ -1947,7 +1824,7 @@ export default function App() {
   if (screen === 'settings') return <><SettingsScreen bootstrap={bootstrap} onChanged={setBootstrap} onBack={closeAuxiliary} />{updateBanner}</>
   if (screen === 'about') return <><AboutScreen bootstrap={bootstrap} updateStatus={currentUpdateStatus} onBack={closeAuxiliary} onSupport={() => setScreen('support')} onCheckUpdate={() => void checkUpdates()} onInstallUpdate={() => void applyUpdate()} />{updateBanner}</>
   if (screen === 'support') return <><SupportScreen bootstrap={bootstrap} onBack={closeAuxiliary} onAbout={() => setScreen('about')} />{updateBanner}</>
-  if (screen === 'guide') return <><GuideScreen onBack={closeAuxiliary} />{updateBanner}</>
+  if (screen === 'guide') return <><GuideScreen onBack={closeAuxiliary} version={bootstrap.appVersion} />{updateBanner}</>
   if (screen === 'review' && project) {
     return (
       <>

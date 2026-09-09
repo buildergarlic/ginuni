@@ -109,7 +109,7 @@ export async function prepareMedia(options: {
   if (project.source.kind === 'youtube') {
     progress({ stage: 'downloading', percent: 8, message: '유튜브 영상 정보를 확인하고 있습니다.' })
     const metadata = await youtubeMetadata(project.source.uri, signal)
-    project.title = metadata.title
+    project.title = metadata.title.replace(/["“”]/g, '').trim() || '유튜브 영상'
     project.source.displayName = metadata.title
     project.source.youtubeVideoId = metadata.id
     project.media.durationMs = Math.round(metadata.duration * 1000)
