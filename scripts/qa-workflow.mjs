@@ -44,10 +44,21 @@ try {
   page.on('pageerror', (error) => errors.push(error.message))
   page.on('dialog', (dialog) => dialog.accept())
   page.setDefaultTimeout(15000)
-  await page.getByRole('button', { name: /워크플로우 테스트 자료/ }).click()
+  await page.locator('.recent-main').filter({ hasText: '워크플로우 테스트 자료' }).click()
+  const openTools = async () => {
+    if (!(await page.getByRole('dialog').isVisible())) await page.getByRole('button', { name: '작업 도구', exact: true }).click()
+  }
+  const closeTools = async () => {
+    if (await page.getByRole('dialog').isVisible()) await page.keyboard.press('Escape')
+  }
+  const openExport = async () => {
+    if (!(await page.getByRole('button', { name: /^HWPX 내보내기/ }).isVisible())) await page.locator('summary').filter({ hasText: '대본 내보내기' }).click()
+  }
+  await openTools()
   await page.getByRole('heading', { name: '확인이 필요한 행 3개' }).waitFor()
   console.log('Opened review:', (await page.locator('body').innerText()).slice(0, 250))
-  await page.getByRole('button', { name: '선택한 행 확인 완료', exact: true }).click()
+  await closeTools()
+  await page.getByRole('button', { name: '확인 완료 · 다음', exact: true }).click()
   const persisted = () => page.evaluate(() => window.screenScript.loadProject('qa-workflow'))
   const waitForProject = async (predicate) => {
     const deadline = Date.now() + 15000
@@ -59,8 +70,10 @@ try {
     throw new Error('Persisted project did not reach the expected state within 15 seconds')
   }
   await waitForProject((project) => project.rows[0].reviewStatus === 'approved')
+  await closeTools()
   checks.push('explicit approval persists')
   console.log(checks.at(-1))
+  await page.getByRole('row', { name: '대사 00:00 확인 완료', exact: true }).click()
   await page.getByRole('textbox', { name: '선택한 행 대본 내용' }).fill('작가가 직접 고친 첫 대사')
   await waitForProject((p) => p.rows[0].content === '작가가 직접 고친 첫 대사' && p.rows[0].reviewStatus === 'unreviewed')
   checks.push('editing clears approval and autosaves without leaving the text field')
@@ -72,11 +85,13 @@ try {
   checks.push('active local-video editor click seeks while preserving paused state and draft')
   await page.getByRole('row', { name: '해설 00:02 확인 필요', exact: true }).click()
   await page.getByRole('textbox', { name: '선택한 행 대본 내용' }).fill('문을 열고 여자가 들어온다.')
-  await page.getByRole('button', { name: '선택한 행 확인 완료', exact: true }).click()
+  await page.getByRole('button', { name: '확인 완료 · 다음', exact: true }).click()
   await waitForProject((p) => p.rows[1].content === '문을 열고 여자가 들어온다.' && p.rows[1].reviewStatus === 'approved')
+  await closeTools()
   checks.push('approval flushes unsaved authored description')
   console.log(checks.at(-1))
   await page.getByRole('row', { name: '대사 00:04 확인 필요', exact: true }).click()
+  await openTools()
   await page.getByText('선택한 대사 교정 제안 받기 · 선택 사항', { exact: true }).click()
   assert.equal(await page.getByRole('button', { name: '선택한 대사 교정 요청 (유료)', exact: true }).isDisabled(), true)
   await page.getByRole('button', { name: '제안 적용', exact: true }).click()
@@ -91,18 +106,21 @@ try {
   assert.equal((await persisted()).rows[1].content, '문을 열고 여자가 들어온다.')
   checks.push('snapshot restores draft without losing previously authored description')
   console.log(checks.at(-1))
+  await closeTools()
   await application.evaluate(({ dialog, shell }, directory) => {
     globalThis.qaWarningOptions = []
     dialog.showMessageBox = async (_window, options) => { globalThis.qaWarningOptions.push(options); return { response: 1, checkboxChecked: false } }
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
     shell.showItemInFolder = () => {}
   }, exportsDirectory)
-  await page.getByRole('button', { name: 'HWPX 내보내기', exact: true }).click()
+  await openExport()
+  await page.getByRole('button', { name: /^HWPX 내보내기/ }).click()
   await page.getByText(/^HWPX를 저장했습니다:/).waitFor()
   const exported = (await persisted()).exports[0]
   assert.match(exported.sha256, /^[0-9a-f]{64}$/)
   assert.equal((await application.evaluate(() => globalThis.qaWarningOptions[0].defaultId)), 0)
-  await page.getByRole('button', { name: 'SRT 내보내기', exact: true }).click()
+  await openExport()
+  await page.getByRole('button', { name: /^SRT 내보내기/ }).click()
   await waitForProject((p) => p.exports.length === 2)
   const srt = await readFile((await persisted()).exports[1].path, 'utf8')
   assert.match(srt, /작가가 직접 고친 첫 대사/)

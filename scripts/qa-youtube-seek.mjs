@@ -65,7 +65,7 @@ try {
     })
   })
   if (!live) await page.route(/^https:\/\/www\.youtube(?:-nocookie)?\.com\/embed\//, route => route.fulfill({ status: 200, contentType: 'text/html', body: iframeHtml }))
-  await page.getByRole('button', { name: /유튜브 이동 테스트/ }).click()
+  await page.locator('.recent-main').filter({ hasText: '유튜브 이동 테스트' }).click()
   await page.locator('iframe').waitFor()
   const frame = await (await page.locator('iframe').elementHandle()).contentFrame()
   assert.ok(frame)

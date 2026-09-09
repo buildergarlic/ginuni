@@ -39,7 +39,7 @@ try {
     assert.equal((await page.locator('body').innerText()).includes('@builder.garlic'), false)
     passed.push('About Threads button opens the requested URL through real IPC')
   } catch (error) { failures.push(error.message) }
-  await page.getByRole('button', { name: '← 돌아가기', exact: true }).click()
+  await page.getByRole('button', { name: /돌아가기/ }).click()
   await page.getByRole('button', { name: '사용법', exact: true }).click()
   await page.getByRole('heading', { name: 'GiNuNi 사용법', exact: true }).waitFor()
   assert.equal(await page.locator('.manual-edition').innerText(), `작가를 위한 안내서 · v${version}`)
@@ -81,7 +81,7 @@ try {
     }
     passed.push('Guide is readable without horizontal overflow at 1440 and 1100 pixels')
   } catch (error) { failures.push(error.message) }
-  await page.getByRole('button', { name: '← 돌아가기', exact: true }).click()
+  await page.getByRole('button', { name: /돌아가기/ }).click()
   await page.getByRole('button', { name: '사용법', exact: true }).waitFor()
   passed.push('Returning from guide restores project home')
   assert.deepEqual(errors, [])
