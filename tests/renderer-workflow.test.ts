@@ -9,14 +9,21 @@ import { initialReviewFontSize, ReviewScreen } from '../src/renderer/src/App'
 
 const row: ScriptRow = { id: 'one', kind: 'dialogue', startMs: 0, endMs: 1000, content: '원문', speakers: [], sourceSegmentIds: ['s1'], reviewed: true, reviewStatus: 'approved', approvedAt: 'today' }
 
-function reviewMarkup(rows: ScriptRow[], processing = false) {
+function reviewMarkup(rows: ScriptRow[], processing = false, notice = '') {
   const project: ScriptProject = { schemaVersion: 1, id: 'p', title: '작품', createdAt: 'now', updatedAt: 'now', status: 'review', localDiarization: { mode: 'none', speakerCount: null }, source: { kind: 'local', uri: 'local.mp4', displayName: 'local' }, media: { durationMs: 1000 }, segments: [], rows, runs: [], exports: [], workflow: { version: 1, revision: 0, consent: {}, proposals: [], events: [] } }
   const noop = () => {}
-  const markup = renderToStaticMarkup(createElement(ReviewScreen, { project, processing, onProject: noop, onBack: noop, onSettings: noop, onAbout: noop, onSupport: noop, onRetry: noop, onRepairModel: noop, notify: noop, closeSaveRef: { current: null } }))
+  const markup = renderToStaticMarkup(createElement(ReviewScreen, { project, processing, notice, onProject: noop, onBack: noop, onSettings: noop, onAbout: noop, onSupport: noop, onRetry: noop, onRepairModel: noop, notify: noop, closeSaveRef: { current: null } }))
   return new DOMParser().parseFromString(markup, 'text/html')
 }
 
 describe('writer workspace accessible output', () => {
+  it('announces operation results in the workspace and preserves them inside modal tools', () => {
+    const document = reviewMarkup([row], false, '저장에 실패했습니다. 다시 시도하세요.')
+    const statuses = Array.from(document.getElementsByTagName('div')).filter((element) => element.getAttribute('role') === 'status' && element.textContent?.includes('저장에 실패했습니다. 다시 시도하세요.'))
+    expect(statuses).toHaveLength(2)
+    expect(document.getElementsByTagName('dialog')[0]?.textContent).toContain('저장에 실패했습니다. 다시 시도하세요.')
+    expect(document.getElementsByTagName('footer')[0]?.textContent).toContain('확인 완료 · 다음')
+  })
   it('keeps confirmation disabled for an approved selection and reports completion', () => {
     const document = reviewMarkup([row])
     const button = Array.from(document.getElementsByTagName('button')).find((entry) => entry.textContent?.includes('확인 완료 · 다음'))

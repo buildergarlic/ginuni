@@ -847,9 +847,10 @@ type RowContextMenuState = {
   y: number
 }
 
-export function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAbout, onSupport, onRetry, onRepairModel, notify, closeSaveRef }: {
+export function ReviewScreen({ project, processing, notice = '', onProject, onBack, onSettings, onAbout, onSupport, onRetry, onRepairModel, notify, closeSaveRef }: {
   project: ScriptProject
   processing: boolean
+  notice?: string
   onProject: (value: ScriptProject) => void
   onBack: () => void
   onSettings: () => void
@@ -1494,9 +1495,11 @@ export function ReviewScreen({ project, processing, onProject, onBack, onSetting
             <h2>{selected ? `${formatTimecode(selected.startMs)} – ${formatTimecode(selected.endMs)} · ${Math.max(0, (selected.endMs - selected.startMs) / 1000)}초` : '영상을 보며 대본을 준비하세요'}</h2>
             <p>대사를 들으며 해설을 작성하세요.</p>
             <button className="source-records-button" onClick={openTools} aria-haspopup="dialog"><ChevronRight20Regular aria-hidden="true" />원문과 작업 기록</button>
+            <div className="review-notice" role="status" aria-atomic="true">{notice && <p>{notice}</p>}</div>
           </section>
           <dialog className="work-tools-dialog" ref={toolsDialogRef} aria-labelledby="work-tools-title" onClose={() => toolsOpenerRef.current?.focus()}>
             <header className="work-tools-heading"><div><h2 id="work-tools-title">작업 도구</h2><p>원문을 확인하고 대본과 작업 기록을 관리하세요.</p></div><button className="icon-button" aria-label="작업 도구 닫기" onClick={() => toolsDialogRef.current?.close()}><Dismiss20Regular aria-hidden="true" /></button></header>
+            <div className="review-notice" role="status" aria-atomic="true">{notice && <p>{notice}</p>}</div>
             <nav className="work-tools-navigation" aria-label="앱 정보와 설정">
               <button className="secondary-button" onClick={() => leaveReview(onSettings)}><Settings20Regular aria-hidden="true" />설정</button>
               <button className="secondary-button" onClick={() => leaveReview(onAbout)}><Info20Regular aria-hidden="true" />About GiNuNi</button>
@@ -1677,7 +1680,7 @@ export function ReviewScreen({ project, processing, onProject, onBack, onSetting
                             formatTimecode(row.endMs)
                           )}
                           {inlineErrors.end && isEditing && <small className="inline-error-hint">{inlineErrors.end}</small>}
-                          </div><small className="row-duration">{Math.max(0, (row.endMs - row.startMs) / 1000)}초</small>
+                          </div>
                         </td>
                         <td><span className={`kind-badge ${row.kind}`}>{row.kind === 'dialogue' ? '대사' : '화면해설'}</span></td>
                         <td className="content-cell" style={{ ...reviewFontStyle, minHeight: `${Math.max(72, Math.round(reviewFontSize * 4.8))}px` }}>
@@ -1886,6 +1889,7 @@ export default function App() {
           key={`${project.id}:${project.runs.length}`}
           project={project}
           processing={projectBusy || Boolean(progress && progress.percent < 100)}
+          notice={notice}
           onProject={setProject}
           notify={setNotice}
           onBack={() => { setScreen('home'); refresh().catch(() => undefined) }}
@@ -1915,7 +1919,6 @@ export default function App() {
             <button disabled={projectBusy} className="floating-process" onClick={startProcessing}>{projectPreset(project) === 'openai' ? 'OpenAI 음성 분석 시작' : projectPreset(project) === 'local-diarization' ? '로컬 화자 분석 시작' : '로컬 음성 분석 시작'}</button>
           </section>
         )}
-        {notice && <div className="toast">{notice}</div>}
         {progress && progress.percent < 100 && (
           <div className="processing-overlay"><div className="processing-card"><span className="eyebrow">VOICE PROCESSING</span><h2>{progress.message}</h2><div className="progress-track"><i style={{ width: `${progress.percent}%` }} /></div><p>{progress.percent}%</p><button className="secondary-button" onClick={() => window.screenScript.cancelProcessing(progress.projectId)}>취소</button></div></div>
         )}
@@ -1957,7 +1960,7 @@ export default function App() {
           </section>
         </div>
       </main>
-      {notice && <div className="toast">{notice}</div>}
+      {notice && <div className="toast" role="status">{notice}</div>}
       {updateBanner}
     </div>
   )

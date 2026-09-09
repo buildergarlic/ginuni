@@ -79,6 +79,7 @@ button:focus-visible, summary:focus-visible, a:focus-visible, input:focus-visibl
 .writing-context h2 { margin: 0; font-size: 20px; line-height: 1.5; font-weight: 700; }
 .writing-context p { margin: 12px 0 22px; color: var(--muted); font-size: 16px; }
 .source-records-button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 18px 0 0; border: 0; border-top: 1px solid var(--line); color: var(--ink); background: none; text-align: left; font-size: 16px; }
+.review-notice p { margin: 16px 0 0; padding: 12px 14px; border: 1px solid #bfd5ce; border-radius: 7px; background: #f1f8f6; color: var(--ink); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
 .script-panel { min-width: 0; background: white; padding: 24px 24px 0; display: flex; flex-direction: column; height: calc(100vh - 88px); min-height: 440px; }
 .script-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 20px; }
 .script-toolbar h2 { margin: 0; font-size: 26px; font-weight: 700; }
@@ -93,9 +94,8 @@ button:focus-visible, summary:focus-visible, a:focus-visible, input:focus-visibl
 .script-table th:nth-child(2) { width: 91px; }
 .script-table th:nth-child(4) { width: 112px; }
 .row-time-range { display: flex; flex-wrap: wrap; align-items: center; column-gap: 3px; font-size: 14px; line-height: 2; }
-.row-time-range .inline-time-input { width: 52px; min-width: 0; border-radius: 4px; padding: 2px; font-size: 14px; line-height: 1.7; font-variant-numeric: tabular-nums; }
+.row-time-range .inline-time-input { field-sizing: content; width: auto; min-width: calc(5ch + 6px); max-width: 100%; flex: 0 0 auto; border-radius: 4px; padding: 2px; font-size: 14px; line-height: 1.7; font-variant-numeric: tabular-nums; }
 .row-time-range .inline-error-hint { flex: 1 1 100%; }
-.row-duration { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
 .content-display { min-height: 0; }
 .inline-content-editor { border-radius: 4px; background: #ffffffb3; }
 .reviewed-mark, .unreviewed-mark { display: inline-block; border-radius: 6px; padding: 5px 8px; font-size: 13px; line-height: 1.5; font-weight: 400; white-space: normal; }
@@ -137,7 +137,6 @@ button:focus-visible, summary:focus-visible, a:focus-visible, input:focus-visibl
   .script-table th:nth-child(1) { width: 135px; }
   .script-table th:nth-child(2) { width: 84px; }
   .script-table th:nth-child(4) { width: 101px; }
-  .row-time-range .inline-time-input { width: 51px; }
   .row-time-range { column-gap: 3px; }
   .review-footer { margin-top: 14px; padding: 14px 0; }
 }
