@@ -5,6 +5,7 @@ import { validateRows } from '@shared/rows'
 import { rowReviewStatus } from '@shared/workflow'
 import { WorkflowPanel } from './WorkflowPanel'
 import { inspectInlineDraft, prepareEditedRows, savePendingEdits, scheduleDraftSave } from './workflow-editing'
+import { createYouTubeSeekController, youtubeApiMessage } from './youtube-seek'
 import { supportsSpeakerLabels as projectSupportsSpeakerLabels } from '@shared/speaker-labels'
 import type {
   BootstrapData,
@@ -111,27 +112,31 @@ function videoIdFromUrl(value: string): string | null {
   }
 }
 
-function youtubeOriginHint(): string {
-  if (typeof window === 'undefined') return 'https://www.youtube.com'
-  return window.location.origin.startsWith('file:') ? 'https://www.youtube.com' : window.location.origin
+function youtubeOriginHint(): string | undefined {
+  if (typeof window === 'undefined' || !/^https?:$/.test(window.location.protocol)) return undefined
+  return window.location.origin
 }
 
 function youtubeMessageTarget(mode: YoutubeEmbedMode): string {
   return mode === 'youtube' ? 'https://www.youtube.com' : 'https://www.youtube-nocookie.com'
 }
 
-function youtubeEmbedUrl(videoId: string, mode: YoutubeEmbedMode = 'nocookie'): string {
+export function youtubeEmbedUrl(videoId: string, mode: YoutubeEmbedMode = 'nocookie'): string {
   const origin = youtubeOriginHint()
   const host = mode === 'youtube' ? 'https://www.youtube.com' : 'https://www.youtube-nocookie.com'
   const parameters = new URLSearchParams({
     enablejsapi: '1',
     playsinline: '1',
     rel: '0',
-    origin,
-    widget_referrer: origin,
     modestbranding: '1',
     iv_load_policy: '3'
   })
+  // Like YouTube's widget API, only specify origin for a web parent. A file://
+  // renderer has an opaque message origin; inventing a web origin blocks replies.
+  if (origin) {
+    parameters.set('origin', origin)
+    parameters.set('widget_referrer', origin)
+  }
   return `${host}/embed/${encodeURIComponent(videoId)}?${parameters}`
 }
 
@@ -312,17 +317,27 @@ const MediaPlayer = forwardRef<MediaHandle, {
     const videoRef = useRef<HTMLVideoElement>(null)
     const iframeRef = useRef<HTMLIFrameElement>(null)
     const pendingSeekRef = useRef<number | null>(null)
-    const lastSyncSecondsRef = useRef<number>(0)
-    const activeSeekTargetRef = useRef<number | null>(null)
-    const youtubeReadyRef = useRef(false)
-    const syncRetryTimerRef = useRef<number | null>(null)
-    const pendingSyncAttemptsRef = useRef(0)
-    const readyRef = useRef(false)
     const youtubeId = project.source.youtubeVideoId ?? videoIdFromUrl(project.source.uri)
     const [youtubeMode, setYoutubeMode] = useState<YoutubeEmbedMode>('nocookie')
     const [youtubeFallbackUsed, setYoutubeFallbackUsed] = useState(false)
     const iframeOrigin = youtubeMessageTarget(youtubeMode)
     const iframeSrc = youtubeId ? youtubeEmbedUrl(youtubeId, youtubeMode) : ''
+    const mediaCallbacksRef = useRef({ onTime, onError, onReady, iframeOrigin })
+    mediaCallbacksRef.current = { onTime, onError, onReady, iframeOrigin }
+    const postYoutubeMessage = useCallback((message: object): void => {
+      iframeRef.current?.contentWindow?.postMessage(youtubeApiMessage(message), mediaCallbacksRef.current.iframeOrigin)
+    }, [])
+    const youtubeSeek = useMemo(() => createYouTubeSeekController({
+      send: postYoutubeMessage,
+      onTime: (seconds) => mediaCallbacksRef.current.onTime(seconds),
+      onReady: () => {
+        mediaCallbacksRef.current.onReady()
+        for (const event of ['onStateChange', 'onError']) {
+          postYoutubeMessage({ event: 'command', func: 'addEventListener', args: [event] })
+        }
+      },
+      onFailure: (message) => mediaCallbacksRef.current.onError(message)
+    }), [youtubeId, project.source.kind, postYoutubeMessage])
 
     const seekLocalVideo = (seconds: number): void => {
       const video = videoRef.current
@@ -340,73 +355,29 @@ const MediaPlayer = forwardRef<MediaHandle, {
       }
     }
 
-    const clearYoutubeRetry = (): void => {
-      if (syncRetryTimerRef.current) {
-        window.clearTimeout(syncRetryTimerRef.current)
-        syncRetryTimerRef.current = null
-      }
-    }
-
-    const sendYoutubeSeek = (seconds: number): void => {
-      if (!iframeRef.current?.contentWindow) return
-      iframeRef.current.contentWindow.postMessage(
-        JSON.stringify({ event: 'command', func: 'seekTo', args: [seconds, true] }),
-        iframeOrigin
-      )
-    }
-
-    const requestYoutubeInfo = (): void => {
-      if (!iframeRef.current?.contentWindow) return
-      iframeRef.current.contentWindow.postMessage(
-        JSON.stringify({ event: 'listening', id: 'screen-description-player', channel: 'info' }),
-        iframeOrigin
-      )
-    }
-
-    const scheduleYoutubeSyncRecheck = (targetSeconds: number): void => {
-      clearYoutubeRetry()
-      const attempt = pendingSyncAttemptsRef.current
-      syncRetryTimerRef.current = window.setTimeout(() => {
-        if (project.source.kind !== 'youtube') return
-        if (!iframeRef.current?.contentWindow) return
-        const delta = Math.abs(lastSyncSecondsRef.current - targetSeconds)
-        if (delta <= 0.6 || attempt >= 3) {
-          activeSeekTargetRef.current = null
-          clearYoutubeRetry()
-          return
-        }
-        pendingSyncAttemptsRef.current = attempt + 1
-        sendYoutubeSeek(targetSeconds)
-        requestYoutubeInfo()
-        scheduleYoutubeSyncRecheck(targetSeconds)
-      }, 650)
-    }
+    const requestYoutubeInfo = useCallback((): void => {
+      postYoutubeMessage({ event: 'listening' })
+    }, [postYoutubeMessage])
 
     useEffect(() => {
       setYoutubeMode('nocookie')
       setYoutubeFallbackUsed(false)
-      youtubeReadyRef.current = false
-      readyRef.current = false
-      clearYoutubeRetry()
       pendingSeekRef.current = null
-      activeSeekTargetRef.current = null
-      pendingSyncAttemptsRef.current = 0
     }, [youtubeId])
 
     useImperativeHandle(ref, () => ({
       seek(seconds: number) {
+        if (!Number.isFinite(seconds)) return
         const safeSeconds = Math.max(0, seconds)
-        onTime(safeSeconds)
-        seekLocalVideo(safeSeconds)
-        if (project.source.kind === 'youtube' && iframeRef.current?.contentWindow) {
-          activeSeekTargetRef.current = safeSeconds
-          pendingSyncAttemptsRef.current = 0
-          if (youtubeReadyRef.current) sendYoutubeSeek(safeSeconds)
-          else requestYoutubeInfo()
-          scheduleYoutubeSyncRecheck(safeSeconds)
+        if (project.source.kind === 'youtube') {
+          youtubeSeek.seek(safeSeconds)
+          requestYoutubeInfo()
+        } else {
+          onTime(safeSeconds)
+          seekLocalVideo(safeSeconds)
         }
       }
-    }), [iframeOrigin, onTime, project.source.kind])
+    }), [youtubeSeek, requestYoutubeInfo, onTime, project.source.kind])
 
     const handleLoadedMetadata = (): void => {
       onReady()
@@ -423,33 +394,13 @@ const MediaPlayer = forwardRef<MediaHandle, {
 
     useEffect(() => {
       if (project.source.kind !== 'youtube' || !youtubeId) return
+      youtubeSeek.reset()
       const receive = (event: MessageEvent): void => {
-        if (event.origin !== 'https://www.youtube.com' && event.origin !== 'https://www.youtube-nocookie.com') return
+        if (event.origin !== iframeOrigin) return
         if (event.source !== iframeRef.current?.contentWindow) return
         try {
           const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
-          if (typeof data?.info?.currentTime === 'number') {
-            lastSyncSecondsRef.current = data.info.currentTime
-            onTime(data.info.currentTime)
-            if (!readyRef.current) {
-              readyRef.current = true
-              onReady()
-              youtubeReadyRef.current = true
-              setYoutubeFallbackUsed(false)
-            }
-            if (activeSeekTargetRef.current !== null) {
-              const delta = Math.abs(data.info.currentTime - activeSeekTargetRef.current)
-              if (delta <= 0.8) {
-                activeSeekTargetRef.current = null
-                clearYoutubeRetry()
-                pendingSyncAttemptsRef.current = 0
-              }
-            }
-          }
-          if (data?.event === 'onReady' && activeSeekTargetRef.current !== null) {
-            youtubeReadyRef.current = true
-            sendYoutubeSeek(activeSeekTargetRef.current)
-          }
+          youtubeSeek.receive(data)
           const isErrorEvent = data?.event === 'onError' || data?.event === 'error' || Object.prototype.hasOwnProperty.call(data, 'error') || typeof data?.info?.error !== 'undefined' || typeof data?.info?.playerError !== 'undefined'
           if (!isErrorEvent) return
           const parsed = parseYouTubeMessage(data)
@@ -459,27 +410,26 @@ const MediaPlayer = forwardRef<MediaHandle, {
           if (isBotLike && !youtubeFallbackUsed && !youtubeMode.includes('youtube')) {
             setYoutubeMode('youtube')
             setYoutubeFallbackUsed(true)
-            onError(youtubeBlockMessage(youtubeId))
+            mediaCallbacksRef.current.onError(youtubeBlockMessage(youtubeId))
             return
           }
           const fallback = `${youtubeErrorMessage(parsed.code)}`
-          onError(`${fallback} (코드 ${parsed.code ?? '알 수 없음'})`)
+          mediaCallbacksRef.current.onError(`${fallback} (코드 ${parsed.code ?? '알 수 없음'})`)
         } catch {
           // YouTube의 다른 메시지는 무시한다.
         }
       }
       const timer = window.setInterval(() => {
+        youtubeSeek.tick()
         requestYoutubeInfo()
-      }, 500)
+      }, 650)
       window.addEventListener('message', receive)
+      requestYoutubeInfo()
       return () => {
         window.removeEventListener('message', receive)
         window.clearInterval(timer)
-        clearYoutubeRetry()
-        activeSeekTargetRef.current = null
-        pendingSyncAttemptsRef.current = 0
       }
-    }, [iframeOrigin, onTime, onError, youtubeFallbackUsed, youtubeId, project.source.kind, youtubeMode])
+    }, [iframeOrigin, youtubeFallbackUsed, youtubeId, project.source.kind, youtubeMode, youtubeSeek, requestYoutubeInfo])
 
     if (project.source.kind === 'youtube' && youtubeId) {
       return (
@@ -489,6 +439,7 @@ const MediaPlayer = forwardRef<MediaHandle, {
           className="media-frame"
           title="유튜브 검수 플레이어"
           src={iframeSrc}
+          onLoad={requestYoutubeInfo}
           referrerPolicy="strict-origin-when-cross-origin"
           allow="accelerometer; autoplay; encrypted-media; picture-in-picture"
           allowFullScreen
@@ -1758,7 +1709,7 @@ function ReviewScreen({ project, processing, onProject, onBack, onSettings, onAb
                         aria-label={`${row.kind === 'dialogue' ? '대사' : '해설'} ${formatTimecode(row.startMs)} ${pendingDraft && draftRow?.id === row.id ? '수정 중 · 확인 전' : rowReviewStatus(row) === 'approved' ? '확인 완료' : '확인 필요'}`}
                         onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); chooseRow(row) } }}
                         className={`${row.kind === 'descriptionGap' ? 'gap-row' : ''} ${selectedId === row.id ? 'selected-row' : ''}`}
-                        onClick={(event) => { if (!(event.target as Element).closest('input, textarea, button')) chooseRow(row) }}
+                        onClick={(event) => { if (!(event.target as Element).closest('input, button')) chooseRow(row) }}
                         onContextMenu={(event) => openContextMenu(event, row.id)}
                       >
                         <td><span className={`kind-badge ${row.kind}`}>{row.kind === 'dialogue' ? '대사' : '해설'}</span></td>
