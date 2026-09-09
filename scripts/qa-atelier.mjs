@@ -118,6 +118,29 @@ try {
     console.log(JSON.stringify({ preview: true, profile: root, syntheticMedia: mediaPath, note: 'Isolated GiNuNi preview is open. Close its window when finished.' }, null, 2))
     await new Promise(resolve => application.process().once('exit', resolve))
   } else {
+  const nextReview = page.getByRole('button', { name: '다음 확인할 행', exact: true })
+  for (let step = 0; step < 7; step++) await nextReview.click()
+  assert.match(await page.locator('.selected-row').getAttribute('aria-label'), /^대사 02:04/)
+  const selectedTextVisible = async () => {
+    // Selection reveal runs after the editor sizing animation frame.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    const geometry = await page.locator('.selected-row textarea').evaluate(el => {
+    const viewport = document.querySelector('.table-wrap').getBoundingClientRect()
+    const header = document.querySelector('.script-table thead th').getBoundingClientRect()
+    const footer = document.querySelector('.review-footer').getBoundingClientRect()
+    const editor = el.getBoundingClientRect()
+    const bottom = Math.min(viewport.bottom, window.innerHeight, footer.top)
+    return { visible: editor.top >= Math.max(viewport.top, header.bottom, 0) - 1 && editor.top + Math.min(editor.height, 65) <= bottom + 1, editorTop: editor.top, editorHeight: editor.height, tableTop: viewport.top, tableBottom: viewport.bottom, headerBottom: header.bottom, footerTop: footer.top, scrollY, windowHeight: innerHeight }
+    })
+    if (!geometry.visible) console.log('Selected text geometry:', JSON.stringify(geometry))
+    return geometry.visible
+  }
+  assert.equal(await selectedTextVisible(), true, 'Next offscreen row must reveal its text below the sticky header')
+  await capture('next-offscreen-1440')
+  await nextReview.click()
+  assert.match(await page.locator('.selected-row').getAttribute('aria-label'), /^해설 01:24/)
+  assert.equal(await selectedTextVisible(), true, 'Wraparound must reveal the first remaining row')
+  checks.push('next-unreviewed reveals offscreen text and wraparound below the table header')
   const startInput = page.getByRole('textbox', { name: '선택한 행 시작 시간', exact: true })
   await startInput.fill('01:')
   assert.equal(await confirm.isDisabled(), true)
@@ -223,10 +246,25 @@ try {
   await waitForProject(project => project.rows[1].content.startsWith('작가가 직접 확인한 긴'))
   assert.equal(await editor.evaluate(el => getComputedStyle(el).fontSize), '28px')
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+  for (let step = 0; step < 7; step++) await nextReview.click()
+  assert.equal(await selectedTextVisible(), true, 'Large-text next row must be readable')
+  await nextReview.click()
+  assert.equal(await selectedTextVisible(), true, 'Large-text wraparound must reveal the beginning of a tall editor')
   await capture('large-text-1100')
   await page.emulateMedia({ reducedMotion: 'reduce', forcedColors: 'active' })
   await capture('high-contrast-1100')
   await page.emulateMedia({ reducedMotion: 'no-preference', forcedColors: 'none' })
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(800, 900))
+  await nextReview.click()
+  assert.equal(await selectedTextVisible(), true, 'Compact layout selection must be visible in the window above its sticky footer')
+  await capture('next-compact-800')
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(800, 600))
+  await nextReview.click()
+  assert.equal(await selectedTextVisible(), true, 'Minimum window selection must reveal readable text above its footer')
+  await capture('next-minimum-800x600')
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(800, 900))
+  for (let step = 0; step < 6; step++) await nextReview.click()
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1100, 900))
   checks.push('responsive workspace at 1440/1100/800px, unobscured footer, precise times, 28px script and high contrast')
 
   // Inject an isolated IPC failure only after other checks. Production services remain unchanged.

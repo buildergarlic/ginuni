@@ -115,7 +115,7 @@ try {
   }, exportsDirectory)
   await openExport()
   await page.getByRole('button', { name: /^HWPX 내보내기/ }).click()
-  await page.getByText(/^HWPX를 저장했습니다:/).waitFor()
+  await page.locator('.writing-context').getByText(/^HWPX를 저장했습니다:/).waitFor()
   const exported = (await persisted()).exports[0]
   assert.match(exported.sha256, /^[0-9a-f]{64}$/)
   assert.equal((await application.evaluate(() => globalThis.qaWarningOptions[0].defaultId)), 0)

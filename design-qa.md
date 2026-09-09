@@ -37,13 +37,25 @@ final result: passed
 - Remaining P3: Windows font rasterization differs from the image-generated type; a future writer field trial can guide typography preference. The supported text-size controls and clear keyboard focus are retained.
 - Stable handoff copies: `docs/design/atelier/desktop.png`, `comparison-full.png`, `comparison-detail.png`. Full transient test artifacts remain under ignored `output/playwright`.
 
+## Final integration review — additional blocking finding
+
+**P1 · Newly selected text can remain offscreen.** Whole-branch review found that next-unreviewed/confirm-next changed selection but did not reveal it in the scrollable table. A new native test reproduces this by navigating from r2 to r9; it fails because the selected editor is outside the visible reading region. Fix automatic reveal after sizing, accounting for the sticky header/footer, including wraparound and large text. Final result is reopened until that regression passes and the revised state is inspected.
+
+### Resolution — round 3
+
+Fixed in `96fc8df`. Selection changes now reveal the selected editor after sizing, with sticky-header and visible-footer bounds. Container scrolling is preferred; minimum-height layouts move the page only as much as needed to expose the first two text lines. The actual editor offset and line height determine that space; no fixed row-height assumption or focus/playback call is used. Outer page scrolling is suppressed while the tools modal is open.
+
+The initial new test failed on the original implementation. Intermediate tests exposed the difference between the entire table and its visible portion at 800 × 900, then the insufficient reading area at 800 × 600. Those constraints were corrected and all nine Atelier scenarios now pass, including offscreen progression, wraparound, long 28px text, minimum-window reveal and save-failure preservation afterward. Tests wait for layout frames and measure actual sticky TH bounds, not the offscreen THEAD container.
+
+Post-fix evidence opened: `output/playwright/atelier-next-offscreen-1440.png`, `atelier-large-text-1100.png`, `atelier-next-compact-800.png`, `atelier-next-minimum-800x600.png`. Full and focused source/implementation comparisons were rebuilt and reopened; the selected visual composition is unchanged. P1 is resolved. No P0/P1/P2 remains; final result restored to passed.
+
 ## Interaction evidence
 
-- Atelier native suite: 8 checks passed, no page errors (draft/approval failure safety, double click, focus, consent persistence, export, responsive sizes, text scaling).
+- Atelier native suite: 9 checks passed, no page errors (draft/approval failure safety, double click, focus, consent persistence, export, responsive sizes, text scaling, selected-text reveal).
 - Existing workflow: 8 checks passed (including proposal application/source preservation, snapshot restore, actual export artifacts and subsequent editing).
 - YouTube controlled iframe boundary: 4 checks passed. Live public YouTube IFrame API example (`M7lc1UVf-VE`): another 4 checks passed for dialogue/description selection and active editor seeking while paused, preserving drafts. No video download or AI request.
 - Guide/About: 5 checks passed, no failures or page errors.
-- Final implementation: 235 unit tests across 30 files, typecheck and build passed in an independent parent run. Task code review approved with no important findings; its precise-time readability note is fixed.
+- Final implementation: 240 unit tests across 30 files, typecheck and build passed in an independent parent run. Task code review approved with no important findings; its precise-time readability note is fixed. Whole-branch selected-text reveal finding is addressed in round 3, and independent delta re-review approved with no remaining critical or important findings.
 
 ## Implementation checklist
 

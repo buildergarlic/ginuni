@@ -97,10 +97,10 @@ Responsive behavior: at1100px use narrower media and readable script; below900px
 
 ## Parent verification and handoff checklist
 
-- [ ] Read implementer report and run independent task/whole-branch review before completion.
+- [x] Read implementer report and run independent task/whole-branch review before completion.
 - [x] After explicit Playwright permission, adapt native Electron QA harness to new disclosures and add confirm-next, save failure/no advance, drawer keyboard/focus preservation and export tests using synthetic local project only.
 - [x] Capture1440x1024,1100x900, narrow/large text, tools and export states. Open reference+implementation together in a comparison input and inspect typography, space, palette, imagery, copy and all P0/P1/P2 differences.
 - [x] Write `design-qa.md` with evidence and exact final result `passed` or `blocked`. Do not claim native/browser visual verification if permission/capture is unavailable.
 - [x] Keep work in the isolated branch and show the actual result. Do not release until verified and the user asks to integrate/publish this redesign.
 
-Execution note: task review approved; visual review fixes are committed in a199786. Selected range duration remains in the media context; redundant per-row duration was removed after comparison. Final parent verification: 235 unit tests, successful typecheck/build and 29 native scenario checks including live YouTube. See design-qa.md and docs/design/2026-09-10-atelier-verification.md. Whole-branch review is the remaining checklist gate before handoff.
+Execution note: task review approved; visual review fixes are committed in a199786, selected-text reveal after whole-branch review in96fc8df. Selected range duration remains in the media context; redundant per-row duration was removed after comparison. Final parent verification: 240 unit tests, successful typecheck/build and 30 native scenario checks including live YouTube. See design-qa.md and docs/design/2026-09-10-atelier-verification.md. Whole-branch delta review approved: no critical or important findings remain. Integration, push and release still require the user's choice.
