@@ -25,3 +25,7 @@ export function parseTimecode(value: string): number | null {
 export function intervalSeconds(startMs: number, endMs: number): number {
   return Math.max(0, Math.round((endMs - startMs) / 1000))
 }
+
+export function formatIntervalSeconds(startMs: number, endMs: number): string {
+  return String(Math.max(0, Math.round(endMs - startMs)) / 1000)
+}

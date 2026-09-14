@@ -13,17 +13,40 @@ export function resolveExportProvenance(project: ScriptProject, format: 'hwpx' |
   const rows = format === 'srt' ? project.rows.filter(row => row.kind === 'dialogue') : project.rows
   const sourceRunIds = new Set<string>()
   const unresolvedSourceSegmentIds = new Set<string>()
-  const unattributedRowIds = rows.filter(row => !row.sourceSegmentIds.length).map(row => row.id)
+  const unattributedRowIds = rows.filter(row => !row.sourceSegmentIds.length && !row.sourceCueIds?.length).map(row => row.id)
   for (const sourceId of new Set(rows.flatMap(row => row.sourceSegmentIds))) {
     const matches = project.runs.filter(run => run.sourceSegments?.some(segment => segment.id === sourceId))
     if (!matches.length) unresolvedSourceSegmentIds.add(sourceId)
     for (const run of matches) sourceRunIds.add(run.id)
   }
   const ids = [...sourceRunIds]
-  const missing = unresolvedSourceSegmentIds.size > 0 || unattributedRowIds.length > 0
-  const sourceProvenance = !ids.length ? 'unavailable' : missing ? 'partial' : ids.length > 1 ? 'multiple' : 'resolved'
+  const sourceAssetIds = new Set<string>()
+  const sourceImportIds = new Set<string>()
+  const unresolvedSourceCueIds = new Set<string>()
+  const workspace = project.subtitleWorkspace
+  const cuesById = new Map(workspace?.cues.map(cue => [cue.id, cue]))
+  const assetsById = new Map(workspace?.assets.map(asset => [asset.id, asset]))
+  const importsByAsset = new Map<string, string[]>()
+  for (const record of workspace?.imports ?? []) {
+    const recordIds = importsByAsset.get(record.assetId) ?? []
+    recordIds.push(record.id)
+    importsByAsset.set(record.assetId, recordIds)
+  }
+  for (const cueId of new Set(rows.flatMap(row => row.sourceCueIds ?? []))) {
+    const cue = cuesById.get(cueId)
+    const asset = cue ? assetsById.get(cue.assetId) : undefined
+    const records = asset ? importsByAsset.get(asset.id) ?? [] : []
+    if (!cue || !asset || !records.length) { unresolvedSourceCueIds.add(cueId); continue }
+    sourceAssetIds.add(asset.id)
+    records.forEach(recordId => sourceImportIds.add(recordId))
+  }
+  const missing = unresolvedSourceSegmentIds.size > 0 || unresolvedSourceCueIds.size > 0 || unattributedRowIds.length > 0
+  const sourceCount = ids.length + sourceImportIds.size
+  const sourceProvenance = !sourceCount ? 'unavailable' : missing ? 'partial' : sourceCount > 1 ? 'multiple' : 'resolved'
   return { sourceRunIds: ids, sourceProvenance, unresolvedSourceSegmentIds: [...unresolvedSourceSegmentIds], unattributedRowIds,
-    ...(sourceProvenance === 'resolved' ? { runId: ids[0] } : {}) }
+    ...(workspace ? { sourceAssetIds: [...sourceAssetIds], sourceImportIds: [...sourceImportIds], unresolvedSourceCueIds: [...unresolvedSourceCueIds],
+      subtitleAssets: workspace.assets.filter(a => sourceAssetIds.has(a.id)).map(a => ({ id: a.id, sha256: a.sha256, sourceKind: a.sourceKind })) } : {}),
+    ...(sourceProvenance === 'resolved' && ids.length === 1 ? { runId: ids[0] } : {}) }
 }
 
 export function getExportGate(project: ScriptProject, format: 'hwpx' | 'srt'): { errors: string[]; unreviewedCount: number } {

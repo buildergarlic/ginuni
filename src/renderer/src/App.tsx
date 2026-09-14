@@ -1,14 +1,15 @@
 import { type MouseEvent as ReactMouseEvent, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
-import { DESCRIPTION_TEXT } from '@shared/constants'
-import { formatTimecode } from '@shared/timecode'
+import { DESCRIPTION_CANDIDATE_TEXT } from '@shared/constants'
+import { formatIntervalSeconds, formatTimecode } from '@shared/timecode'
 import { validateRows } from '@shared/rows'
 import { rowReviewStatus } from '@shared/workflow'
 import { Add20Regular, ArrowLeft20Regular, ArrowRight20Regular, ArrowUndo20Regular, ArrowExportUp20Regular, CheckmarkCircle20Regular, ChevronDown20Regular, ChevronRight20Regular, Dismiss20Regular, Document20Regular, Folder20Regular, Heart20Regular, Info20Regular, Play20Regular, Settings20Regular, Subtract20Regular, Video20Regular } from '@fluentui/react-icons'
 import { WorkflowPanel } from './WorkflowPanel'
+import { SubtitleImportDialog } from './SubtitleImportDialog'
 import { nextUnreviewedRow, scrollTopToRevealRow } from './review-navigation'
 import { GuideScreen } from './GuideScreen'
 import ginuniLogo from './assets/branding/ginuni-logo.png'
-import { inspectInlineDraft, prepareEditedRows, savePendingEdits, scheduleDraftSave } from './workflow-editing'
+import { inspectInlineDraft, inspectManualRowDraft, prepareEditedRows, savePendingEdits, scheduleDraftSave, type ManualRowDraft } from './workflow-editing'
 import { createYouTubeSeekController, youtubeApiMessage } from './youtube-seek'
 import { supportsSpeakerLabels as projectSupportsSpeakerLabels } from '@shared/speaker-labels'
 import type {
@@ -22,11 +23,13 @@ import type {
   ScriptRow,
   UpdateStatus
 } from '@shared/types'
+import type { SubtitlePreview, SubtitlePreviewOptions, SubtitleResolution } from '@shared/subtitle-types'
 
 type Screen = 'home' | 'review' | 'settings' | 'about' | 'support' | 'guide'
 type SourceTab = 'local' | 'youtube'
 type AnalysisPreset = 'local' | 'local-diarization' | 'openai'
 type YoutubeEmbedMode = 'nocookie' | 'youtube'
+type ReviewStartMode = 'subtitle' | 'manual' | 'audio'
 
 const REVIEW_FONT_SIZE_KEY = 'ginuni-review-font-size'
 const REVIEW_FONT_SIZE_MIN = 11
@@ -311,6 +314,18 @@ export function splitSourceSegments(segmentIds: string[], row: ScriptRow, splitM
   return [segmentIds.slice(0, boundary), segmentIds.slice(boundary)]
 }
 
+export function sourceReferencesForSplit(sourceIds: string[]): [string[], string[]] {
+  return [[...sourceIds], [...sourceIds]]
+}
+
+export function mergeSourceReferences(left: string[], right: string[]): string[] {
+  return [...new Set([...left, ...right])]
+}
+
+export function playheadMilliseconds(seconds: number): number {
+  return Math.round(seconds * 1000)
+}
+
 const MediaPlayer = forwardRef<MediaHandle, {
   project: ScriptProject
   onTime: (seconds: number) => void
@@ -485,7 +500,7 @@ function EmptyState({ onNew }: { onNew: () => void }) {
 
 function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
   bootstrap: BootstrapData
-  onCreated: (project: ScriptProject) => void
+  onCreated: (project: ScriptProject, startMode: ReviewStartMode) => void
   onOpenSettings: () => void
 }) {
   const [tab, setTab] = useState<SourceTab>('local')
@@ -493,6 +508,7 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [title, setTitle] = useState('')
   const [preset, setPreset] = useState<AnalysisPreset>('local')
+  const [startMode, setStartMode] = useState<ReviewStartMode>('subtitle')
   const [speakerCount, setSpeakerCount] = useState('auto')
   const [rightsConfirmed, setRightsConfirmed] = useState(false)
   const [cloudAudioConsent, setCloudAudioConsent] = useState(false)
@@ -511,17 +527,19 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
       title: title.trim() || undefined,
       localPath: tab === 'local' ? localPath : undefined,
       youtubeUrl: tab === 'youtube' ? youtubeUrl.trim() : undefined,
-      transcriptionEngine: preset === 'openai' ? 'openai' : 'local',
+      transcriptionEngine: startMode === 'audio' && preset === 'openai' ? 'openai' : 'local',
       rightsConfirmed,
-      cloudAudioConsent: preset === 'openai' && cloudAudioConsent,
+      cloudAudioConsent: startMode === 'audio' && preset === 'openai' && cloudAudioConsent,
       localDiarization: {
-        mode: preset === 'local-diarization' ? 'sherpa-onnx' : 'none',
-        speakerCount: preset === 'local-diarization' && speakerCount !== 'auto' ? Number(speakerCount) : null
+        mode: startMode === 'audio' && preset === 'local-diarization' ? 'sherpa-onnx' : 'none',
+        speakerCount: startMode === 'audio' && preset === 'local-diarization' && speakerCount !== 'auto' ? Number(speakerCount) : null
       }
     }
     try {
       setBusy(true)
-      onCreated(await window.screenScript.createProject(input))
+      const created = await window.screenScript.createProject(input)
+      const prepared = startMode === 'audio' ? created : await window.screenScript.prepareProjectMedia(created.id)
+      onCreated(prepared, startMode)
     } catch (cause) {
       setError(errorMessage(cause))
     } finally {
@@ -536,7 +554,13 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
         <p>최대 3시간 · 한국어 우선</p>
       </div>
       <p className="private-mode-note">기본은 내 PC에서 비공개 작업 · 음성 외부 전송 없음</p>
-      <details className="advanced-analysis"><summary>고급 옵션 · 음성 분석 방식 변경 ({preset === 'openai' ? 'OpenAI' : '내 PC'})</summary>
+      <label className="field-label">시작 방법</label>
+      <div className="engine-options start-mode-options">
+        <button className={startMode === 'subtitle' ? 'active' : ''} disabled={tab !== 'local'} onClick={() => setStartMode('subtitle')}><strong>자막 파일로 시작</strong><span>SRT의 문장과 시간을 그대로 불러옵니다</span></button>
+        <button className={startMode === 'manual' ? 'active' : ''} disabled={tab !== 'local'} onClick={() => setStartMode('manual')}><strong>대사를 직접 입력</strong><span>영상을 보며 첫 구간부터 작성합니다</span></button>
+        <button className={startMode === 'audio' ? 'active' : ''} onClick={() => setStartMode('audio')}><strong>음성에서 만들기</strong><span>기존 음성 분석으로 초안을 만듭니다</span></button>
+      </div>
+      {startMode === 'audio' && <details className="advanced-analysis"><summary>고급 옵션 · 음성 분석 방식 변경 ({preset === 'openai' ? 'OpenAI' : '내 PC'})</summary>
       <label className="field-label">음성 분석 방식</label>
       <div className="engine-options">
         <button className={preset === 'local' ? 'active' : ''} onClick={() => setPreset('local')}>
@@ -579,11 +603,11 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
           <strong>OpenAI 모드는 API 키가 필요합니다</strong><span>처리를 시작하기 전에 설정에서 등록하세요 →</span>
         </button>
       )}
-      </details>
-      {preset === 'openai' && <label className="consent-check"><input type="checkbox" checked={cloudAudioConsent} onChange={(event) => setCloudAudioConsent(event.target.checked)} />음성을 OpenAI에 전송하는 데 동의합니다. API 사용료가 발생하며, 일부 오류에서 같은 제공자로 최대 1회 재시도합니다 (총 최대 2회 요청).</label>}
+      </details>}
+      {startMode === 'audio' && preset === 'openai' && <label className="consent-check"><input type="checkbox" checked={cloudAudioConsent} onChange={(event) => setCloudAudioConsent(event.target.checked)} />음성을 OpenAI에 전송하는 데 동의합니다. API 사용료가 발생하며, 일부 오류에서 같은 제공자로 최대 1회 재시도합니다 (총 최대 2회 요청).</label>}
       <div className="source-tabs">
         <button className={tab === 'local' ? 'active' : ''} onClick={() => setTab('local')}>내 컴퓨터 파일</button>
-        <button className={tab === 'youtube' ? 'active' : ''} onClick={() => setTab('youtube')}>유튜브 링크</button>
+        <button className={tab === 'youtube' ? 'active' : ''} onClick={() => { setTab('youtube'); setStartMode('audio') }}>유튜브 링크</button>
       </div>
       <label className="field-label">프로젝트 제목 <span>선택</span></label>
       <input className="text-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="비워두면 영상 제목을 사용합니다" />
@@ -602,7 +626,7 @@ function NewProjectPanel({ bootstrap, onCreated, onOpenSettings }: {
       )}
       {error && <p className="error-text">{error}</p>}
       <label className="consent-check"><input type="checkbox" checked={rightsConfirmed} onChange={(event) => setRightsConfirmed(event.target.checked)} />이 영상·음성을 사용할 권리가 있습니다.</label>
-      <button className="primary-button wide" disabled={busy || !rightsConfirmed || (preset === 'openai' && !cloudAudioConsent)} onClick={create}>{busy ? '만드는 중…' : '프로젝트 만들기'}</button>
+      <button className="primary-button wide" disabled={busy || !rightsConfirmed || (startMode === 'audio' && preset === 'openai' && !cloudAudioConsent)} onClick={create}>{busy ? '만드는 중…' : startMode === 'subtitle' ? '프로젝트 만들고 자막 선택' : startMode === 'manual' ? '프로젝트 만들고 직접 입력' : '프로젝트 만들기'}</button>
     </section>
   )
 }
@@ -849,10 +873,12 @@ type RowContextMenuState = {
   y: number
 }
 
-export function ReviewScreen({ project, processing, notice = '', onProject, onBack, onSettings, onAbout, onSupport, onRetry, onRepairModel, notify, closeSaveRef }: {
+export function ReviewScreen({ project, processing, notice = '', initialAction, onInitialActionHandled, onProject, onBack, onSettings, onAbout, onSupport, onRetry, onRepairModel, notify, closeSaveRef }: {
   project: ScriptProject
   processing: boolean
   notice?: string
+  initialAction?: Exclude<ReviewStartMode, 'audio'>
+  onInitialActionHandled?: () => void
   onProject: (value: ScriptProject) => void
   onBack: () => void
   onSettings: () => void
@@ -882,6 +908,12 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
   const [inlineDraft, setInlineDraft] = useState<InlineRowDraft | null>(null)
   const [inlineErrors, setInlineErrors] = useState<{ start?: string; end?: string; content?: string }>({})
   const [contextMenu, setContextMenu] = useState<RowContextMenuState | null>(null)
+  const [manualDraft, setManualDraft] = useState<ManualRowDraft | null>(() => initialAction === 'manual' ? { kind: 'dialogue', start: '', end: '', content: '' } : null)
+  const [manualErrors, setManualErrors] = useState<{ start?: string; end?: string; content?: string }>({})
+  const [subtitleOpen, setSubtitleOpen] = useState(initialAction === 'subtitle')
+  const [subtitlePreview, setSubtitlePreview] = useState<SubtitlePreview | null>(null)
+  const [subtitleImportError, setSubtitleImportError] = useState('')
+  const startedInitialSubtitleRef = useRef(false)
   const toolsDialogRef = useRef<HTMLDialogElement>(null)
   const toolsOpenerRef = useRef<HTMLElement | null>(null)
   const exportDisclosureRef = useRef<HTMLDetailsElement>(null)
@@ -903,6 +935,7 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
   const mutationRef = useRef(false)
   const [mutating, setMutating] = useState(false)
   const editingBlocked = processing || mutating
+  const supportsDirectDraft = project.source.kind === 'local'
   const inlineDraftRef = useRef(inlineDraft)
   inlineDraftRef.current = inlineDraft
   const errors = useMemo(() => validateRows(rows), [rows])
@@ -1170,8 +1203,10 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
   }
   const flushDraft = async (): Promise<void> => {
     if (mutationRef.current) throw new Error('요청을 처리하고 있습니다. 완료 후 다시 시도하세요.')
+    if (manualDraft && (manualDraft.start.trim() || manualDraft.end.trim() || manualDraft.content.trim())) throw new Error('첫 행 입력이 아직 저장되지 않았습니다. 시간을 확인해 행을 추가하거나 입력을 취소하세요.')
     if (!applyInlineDraft()) throw new Error('시작/종료 시간 형식을 확인하세요.')
     await flushSave()
+    if (subtitlePreview) await window.screenScript.discardSubtitlePreview(project.id, subtitlePreview.previewId)
   }
   useEffect(() => {
     closeSaveRef.current = flushDraft
@@ -1181,7 +1216,7 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
     if (savePromiseRef.current || mutationRef.current || savedVersionRef.current < editVersionRef.current) return
     revisionRef.current = project.workflow?.revision ?? 0
   }, [project])
-  const runAction = async (operation: () => Promise<void>): Promise<void> => {
+  const runAction = async (operation: () => Promise<void>, onError?: (cause: unknown) => void): Promise<void> => {
     if (mutationRef.current || processing) return
     try {
       // Commit the current input before locking editing; applyRows refuses writes while locked.
@@ -1191,7 +1226,7 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
       setContextMenu(null)
       await flushSave()
       await operation()
-    } catch (cause) { notify(errorMessage(cause)) }
+    } catch (cause) { if (onError) onError(cause); else notify(errorMessage(cause)) }
     finally { mutationRef.current = false; setMutating(false) }
   }
   const mutateProject = async (operation: (revision: number) => Promise<ScriptProject>, resolveSelection?: (updated: ScriptProject) => ScriptRow | undefined): Promise<void> => {
@@ -1237,16 +1272,17 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
     const row = rows[index]
     if (!row) return
     const midpoint = Math.round(((row.startMs + row.endMs) / 2) / 1000) * 1000
-    const requested = Math.round(playhead * 1000 / 1000) * 1000
+    const requested = playheadMilliseconds(playhead)
     const point = requested > row.startMs && requested < row.endMs ? requested : midpoint
     if (point <= row.startMs || point >= row.endMs) return
     const rowText = inlineDraft?.rowId === row.id ? inlineDraft.content : row.content
     const [left, right] = splitTextForDurationPoint(rowText, row.startMs, row.endMs, point)
     const nextSegments = splitSourceSegments(row.sourceSegmentIds, row, point)
+    const nextCues = sourceReferencesForSplit(row.sourceCueIds ?? [])
     const next = [...rows]
     next.splice(index, 1,
-      { ...row, id: crypto.randomUUID(), endMs: point, reviewed: false, content: left, sourceSegmentIds: nextSegments[0] },
-      { ...row, id: crypto.randomUUID(), startMs: point, reviewed: false, content: right, sourceSegmentIds: nextSegments[1] }
+      { ...row, id: crypto.randomUUID(), endMs: point, reviewed: false, content: left, sourceSegmentIds: nextSegments[0], sourceCueIds: nextCues[0] },
+      { ...row, id: crypto.randomUUID(), startMs: point, reviewed: false, content: right, sourceSegmentIds: nextSegments[1], sourceCueIds: nextCues[1] }
     )
     applyRows(next)
     setSelectedId(next[index].id)
@@ -1267,8 +1303,9 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
       endMs: following.endMs,
       kind: selectedRow.kind === 'dialogue' || following.kind === 'dialogue' ? 'dialogue' : 'descriptionGap',
       speakers: [...new Set([...selectedRow.speakers, ...following.speakers])],
-      content: selectedRow.kind === 'descriptionGap' && following.kind === 'descriptionGap' ? DESCRIPTION_TEXT : `${selectedRow.content} ${following.content}`.trim(),
+      content: selectedRow.kind === 'descriptionGap' && following.kind === 'descriptionGap' ? DESCRIPTION_CANDIDATE_TEXT : `${selectedRow.content} ${following.content}`.trim(),
       sourceSegmentIds: [...selectedRow.sourceSegmentIds, ...following.sourceSegmentIds],
+      sourceCueIds: mergeSourceReferences(selectedRow.sourceCueIds ?? [], following.sourceCueIds ?? []),
       reviewed: false
     }
     const next = [...rows]
@@ -1360,6 +1397,104 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
     if (!selected) return
     deleteRowAtIndex(selectedIndex)
   }
+  const previewSubtitleFile = async (options: SubtitlePreviewOptions): Promise<void> => {
+    setSubtitleImportError('')
+    await runAction(async () => {
+      if (subtitlePreview) await window.screenScript.discardSubtitlePreview(project.id, subtitlePreview.previewId)
+      setSubtitlePreview(null)
+      const prepared = await window.screenScript.prepareProjectMedia(project.id)
+      revisionRef.current = prepared.workflow?.revision ?? 0
+      rowsRef.current = prepared.rows
+      setRows(prepared.rows)
+      onProject(prepared)
+      const value = await window.screenScript.previewSubtitleImport(project.id, revisionRef.current, options)
+      if (value) setSubtitlePreview(value)
+    }, (cause) => setSubtitleImportError(errorMessage(cause)))
+  }
+  const applySubtitleFile = async (offsetMs: number, resolutions: SubtitleResolution[]): Promise<void> => {
+    setSubtitleImportError('')
+    await runAction(async () => {
+      if (!subtitlePreview) return
+      const updated = await window.screenScript.applySubtitleImport(project.id, subtitlePreview.previewId, offsetMs, resolutions, revisionRef.current)
+      revisionRef.current = updated.workflow?.revision ?? 0
+      rowsRef.current = updated.rows
+      setRows(updated.rows)
+      const selection = updated.rows[0]
+      setSelectedId(selection?.id ?? '')
+      const draft = loadDraftFromRow(selection)
+      inlineDraftRef.current = draft
+      setInlineDraft(draft)
+      setInlineErrors({})
+      setHistory([])
+      setDirty(false)
+      setSubtitlePreview(null)
+      setSubtitleOpen(false)
+      onProject(updated)
+      notify(`자막 ${updated.rows.filter((row) => row.kind === 'dialogue').length.toLocaleString()}행을 새 초안으로 적용했습니다.`)
+    }, (cause) => setSubtitleImportError(errorMessage(cause)))
+  }
+  const closeSubtitleDialog = async (): Promise<void> => {
+    const current = subtitlePreview
+    setSubtitlePreview(null)
+    setSubtitleOpen(false)
+    setSubtitleImportError('')
+    if (!current) return
+    try { await window.screenScript.discardSubtitlePreview(project.id, current.previewId) }
+    catch (cause) { notify(errorMessage(cause)) }
+  }
+  useEffect(() => {
+    if (initialAction !== 'subtitle' || startedInitialSubtitleRef.current) return
+    startedInitialSubtitleRef.current = true
+    onInitialActionHandled?.()
+    void previewSubtitleFile({ sourceKind: 'provided-srt', declaredAuthority: 'unknown' })
+  }, [initialAction, onInitialActionHandled])
+  useEffect(() => {
+    if (initialAction === 'manual') onInitialActionHandled?.()
+  }, [initialAction, onInitialActionHandled])
+  const openManualComposer = (): void => {
+    void closeSubtitleDialog()
+    toolsDialogRef.current?.close()
+    setManualErrors({})
+    setManualDraft((value) => value ?? { kind: 'dialogue', start: '', end: '', content: '' })
+  }
+  const cancelManualComposer = (): void => {
+    if (manualDraft && (manualDraft.start.trim() || manualDraft.end.trim() || manualDraft.content.trim()) && !window.confirm('아직 행으로 저장하지 않은 입력을 버릴까요?')) return
+    setManualDraft(null)
+    setManualErrors({})
+  }
+  const openSubtitleImporter = (): void => {
+    if (manualDraft && (manualDraft.start.trim() || manualDraft.end.trim() || manualDraft.content.trim()) && !window.confirm('아직 행으로 저장하지 않은 입력을 버리고 자막 파일을 열까요?')) return
+    setManualDraft(null)
+    setManualErrors({})
+    setSubtitleImportError('')
+    toolsDialogRef.current?.close()
+    setSubtitleOpen(true)
+  }
+  const saveManualRow = (): void => {
+    if (!manualDraft || mutationRef.current || processing) return
+    const inspected = inspectManualRowDraft(manualDraft)
+    if (inspected.row && project.media.durationMs > 0 && inspected.row.endMs > project.media.durationMs) {
+      inspected.errors.end = `종료 시간은 영상 길이 ${formatTimecode(project.media.durationMs)} 안이어야 합니다.`
+      inspected.row = null
+    }
+    setManualErrors(inspected.errors)
+    if (!inspected.row) return
+    const inserted: ScriptRow = {
+      id: crypto.randomUUID(),
+      ...inspected.row,
+      speakers: [],
+      sourceSegmentIds: [],
+      sourceCueIds: [],
+      reviewed: false
+    }
+    const next = [...rowsRef.current, inserted].sort((left, right) => left.startMs - right.startMs || left.endMs - right.endMs)
+    applyRows(next)
+    setSelectedId(inserted.id)
+    setInlineDraft(loadDraftFromRow(inserted))
+    setManualDraft(null)
+    setManualErrors({})
+    mediaRef.current?.seek(inserted.startMs / 1000)
+  }
   const openContextMenu = (event: ReactMouseEvent<HTMLTableRowElement>, rowId: string): void => {
     const row = rows.find((entry) => entry.id === rowId)
     if (!row) return
@@ -1426,7 +1561,7 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
         applyRows(rows.map((entry) => entry.id === row.id ? {
           ...entry,
           kind: 'descriptionGap',
-          content: DESCRIPTION_TEXT,
+          content: DESCRIPTION_CANDIDATE_TEXT,
           speakers: []
         } : entry))
       }
@@ -1488,10 +1623,9 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
     if (mutationRef.current || processing) return
     void (async () => {
       try {
-        if (!applyInlineDraft()) throw new Error('시작/종료 시간 형식을 확인하세요.')
+        await flushDraft()
         mutationRef.current = true
         setMutating(true)
-        await flushSave()
         mutationRef.current = false
         setMutating(false)
         navigate()
@@ -1535,7 +1669,7 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
           )}
           <section className="writing-context" aria-label="영상과 선택 구간">
             <div className="playhead-card"><span>현재 재생 위치</span><strong>{formatTimecode(playhead * 1000)}{project.media.durationMs ? ` / ${formatTimecode(project.media.durationMs)}` : ''}</strong></div>
-            <h2>{selected ? `${formatTimecode(selected.startMs)} – ${formatTimecode(selected.endMs)} · ${Math.max(0, (selected.endMs - selected.startMs) / 1000)}초` : '영상을 보며 대본을 준비하세요'}</h2>
+            <h2>{selected ? `${formatTimecode(selected.startMs)} – ${formatTimecode(selected.endMs)} · ${formatIntervalSeconds(selected.startMs, selected.endMs)}초` : '영상을 보며 대본을 준비하세요'}</h2>
             <p>대사를 들으며 해설을 작성하세요.</p>
             <button className="source-records-button" onClick={openTools} aria-haspopup="dialog"><ChevronRight20Regular aria-hidden="true" />원문과 작업 기록</button>
             <div className="review-notice" role="status" aria-atomic="true">{notice && <p>{notice}</p>}</div>
@@ -1549,6 +1683,14 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
               <button className="secondary-button" onClick={() => leaveReview(onSupport)}><Heart20Regular aria-hidden="true" />개발자 후원</button>
             </nav>
             <fieldset className="tools-edit-lock" disabled={editingBlocked}>
+          <section className="draft-source-actions" aria-label="대사 초안 시작 방법">
+            <h3>대사 초안 준비</h3>
+            <div className="workflow-buttons">
+              <button className="secondary-button" disabled={!supportsDirectDraft} title={supportsDirectDraft ? '' : '로컬 영상 프로젝트에서 사용할 수 있습니다.'} onClick={openSubtitleImporter}>자막 파일로 시작</button>
+              <button className="secondary-button" disabled={!supportsDirectDraft} title={supportsDirectDraft ? '' : '로컬 영상 프로젝트에서 사용할 수 있습니다.'} onClick={openManualComposer}>대사를 직접 입력</button>
+            </div>
+            <p>두 방법 모두 음성 분석이나 모델 다운로드 없이 작업할 수 있습니다.</p>
+          </section>
           <WorkflowPanel project={project} rows={visibleRows} selected={visibleSelected} busy={editingBlocked} mutate={mutateProject} action={runAction} choose={(row) => { chooseRow(row) }} seek={(seconds) => mediaRef.current?.seek(seconds)} />
             {selected && (
               <div className="edit-card">
@@ -1561,11 +1703,11 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
                   content: selected.kind === 'descriptionGap' ? (supportsSpeakerLabels ? '[화자1] [화자1] 대사' : '대사') : selected.content,
                   speakers: supportsSpeakerLabels ? (selected.speakers.length ? selected.speakers : ['화자1']) : []
                 })}>대사</button>
-                <button className={selected.kind === 'descriptionGap' ? 'active' : ''} onClick={() => updateRow(selected.id, { kind: 'descriptionGap', content: DESCRIPTION_TEXT, speakers: [] })}>해설</button>
+                <button className={selected.kind === 'descriptionGap' ? 'active' : ''} onClick={() => updateRow(selected.id, { kind: 'descriptionGap', content: DESCRIPTION_CANDIDATE_TEXT, speakers: [] })}>해설</button>
               </div>
               <div className="button-row compact">
-                <button onClick={() => updateRow(selected.id, { startMs: Math.floor(playhead) * 1000 })}>현재 위치를 시작으로</button>
-                <button onClick={() => updateRow(selected.id, { endMs: Math.ceil(playhead) * 1000 })}>현재 위치를 종료로</button>
+                <button onClick={() => updateRow(selected.id, { startMs: playheadMilliseconds(playhead) })}>현재 위치를 시작으로</button>
+                <button onClick={() => updateRow(selected.id, { endMs: playheadMilliseconds(playhead) })}>현재 위치를 종료로</button>
               </div>
               <div className="button-row compact">
                 <button onClick={split}>현재 위치에서 분할</button>
@@ -1660,6 +1802,31 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
                 ))}
               </ul>
             </div>
+          )}
+          {rows.length === 0 && (
+            <section className="empty-draft-actions" aria-label="빈 대본 시작">
+              <h3>음성 분석 없이 대본을 시작할 수 있어요</h3>
+              <p>준비된 SRT를 불러오거나, 영상에서 구간을 정해 첫 대사를 직접 입력하세요.</p>
+              <div className="workflow-buttons">
+                <button className="primary-button" disabled={!supportsDirectDraft} title={supportsDirectDraft ? '' : '로컬 영상 프로젝트에서 사용할 수 있습니다.'} onClick={openSubtitleImporter}>자막 파일로 시작</button>
+                <button className="secondary-button" disabled={!supportsDirectDraft} title={supportsDirectDraft ? '' : '로컬 영상 프로젝트에서 사용할 수 있습니다.'} onClick={openManualComposer}>대사를 직접 입력</button>
+              </div>
+            </section>
+          )}
+          {manualDraft && (
+            <section className="manual-row-composer" aria-labelledby="manual-row-title">
+              <div className="manual-row-heading"><div><h3 id="manual-row-title">첫 행 직접 입력</h3><p>시간이 유효해질 때까지 이 내용은 임시 입력으로 남습니다.</p></div><button className="icon-button" aria-label="직접 입력 닫기" onClick={cancelManualComposer}><Dismiss20Regular aria-hidden="true" /></button></div>
+              <div className="segmented-control">
+                <button className={manualDraft.kind === 'dialogue' ? 'active' : ''} onClick={() => setManualDraft({ ...manualDraft, kind: 'dialogue' })}>대사</button>
+                <button className={manualDraft.kind === 'descriptionGap' ? 'active' : ''} onClick={() => setManualDraft({ ...manualDraft, kind: 'descriptionGap' })}>화면해설</button>
+              </div>
+              <div className="manual-time-grid">
+                <label className="field-label">시작 시간<input value={manualDraft.start} placeholder="00:00.000" onChange={(event) => { setManualDraft({ ...manualDraft, start: event.target.value }); setManualErrors((value) => ({ ...value, start: undefined })) }} />{manualErrors.start && <small className="inline-error-hint">{manualErrors.start}</small>}<button className="compact-action secondary-button" onClick={() => setManualDraft({ ...manualDraft, start: formatTimecode(playheadMilliseconds(playhead)) })}>현재 영상 시간을 시작으로</button></label>
+                <label className="field-label">종료 시간<input value={manualDraft.end} placeholder="00:00.000" onChange={(event) => { setManualDraft({ ...manualDraft, end: event.target.value }); setManualErrors((value) => ({ ...value, end: undefined })) }} />{manualErrors.end && <small className="inline-error-hint">{manualErrors.end}</small>}<button className="compact-action secondary-button" onClick={() => setManualDraft({ ...manualDraft, end: formatTimecode(playheadMilliseconds(playhead)) })}>현재 영상 시간을 종료로</button></label>
+              </div>
+              <label className="field-label">{manualDraft.kind === 'dialogue' ? '대사 내용' : '화면해설 내용'}<textarea value={manualDraft.content} placeholder={manualDraft.kind === 'dialogue' ? '시간 없는 대본을 붙여 넣을 수 있습니다.' : '영상을 확인하고 화면해설을 입력하세요.'} onChange={(event) => { setManualDraft({ ...manualDraft, content: event.target.value }); setManualErrors((value) => ({ ...value, content: undefined })) }} />{manualErrors.content && <small className="inline-error-hint">{manualErrors.content}</small>}</label>
+              <div className="button-row"><button className="primary-button" onClick={saveManualRow}>행 추가</button><button className="secondary-button" onClick={cancelManualComposer}>취소</button></div>
+            </section>
           )}
           <div className="table-wrap" ref={scriptViewportRef}>
             <table className="script-table">
@@ -1767,10 +1934,10 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
                 <button className="row-context-item danger" onClick={() => void runDeleteOnContextRow()}>행 삭제</button>
               </div>
             )}
-            {rows.length === 0 && <div className="empty-table">아직 분석된 대본이 없습니다. 음성 분석 시작 버튼으로 대사 초안을 준비하세요.</div>}
+            {rows.length === 0 && <div className="empty-table">아직 대본 행이 없습니다. 자막 파일을 불러오거나 첫 행을 직접 입력하세요.</div>}
           </div>
           <footer className="review-footer" ref={reviewFooterRef}>
-            <p role="status"><Info20Regular aria-hidden="true" />{!rows.length ? '음성을 분석한 뒤 대본을 확인할 수 있어요.' : pendingDraft ? '수정한 내용을 다시 확인해야 해요.' : remainingCount === 0 ? '모든 행을 확인했어요. 대본을 내보낼 수 있어요.' : visibleSelected && rowReviewStatus(visibleSelected) === 'approved' ? '이 행은 확인했어요. 다음 구간으로 이동하세요.' : '영상을 듣고 이 행을 확인해 주세요.'}</p>
+            <p role="status"><Info20Regular aria-hidden="true" />{!rows.length ? '자막 파일 또는 직접 입력으로 대본을 시작할 수 있어요.' : pendingDraft ? '수정한 내용을 다시 확인해야 해요.' : remainingCount === 0 ? '모든 행을 확인했어요. 대본을 내보낼 수 있어요.' : visibleSelected && rowReviewStatus(visibleSelected) === 'approved' ? '이 행은 확인했어요. 다음 구간으로 이동하세요.' : '영상을 듣고 이 행을 확인해 주세요.'}</p>
             <div className="review-footer-actions">
               <button className="secondary-button" disabled={editingBlocked || !history.length} onClick={undo}><ArrowUndo20Regular aria-hidden="true" />실행 취소</button>
               <button className="next-review-button" disabled={editingBlocked || invalidDraft || !nextReviewRow} onClick={() => nextReviewRow && chooseRow(nextReviewRow)}>다음 확인할 행</button>
@@ -1779,6 +1946,7 @@ export function ReviewScreen({ project, processing, notice = '', onProject, onBa
           </footer>
         </main>
       </div></fieldset>
+      <SubtitleImportDialog open={subtitleOpen} preview={subtitlePreview} busy={editingBlocked} error={subtitleImportError} hasExistingRows={rows.length > 0} onPreview={previewSubtitleFile} onApply={applySubtitleFile} onClose={closeSubtitleDialog} />
     </div>
   )
 }
@@ -1790,6 +1958,7 @@ export default function App() {
   const [returnScreen, setReturnScreen] = useState<'home' | 'review'>('home')
   const [showNew, setShowNew] = useState(true)
   const [project, setProject] = useState<ScriptProject | null>(null)
+  const [reviewStartAction, setReviewStartAction] = useState<Exclude<ReviewStartMode, 'audio'> | undefined>()
   const [progress, setProgress] = useState<ProcessingProgress | null>(null)
   const [notice, setNotice] = useState('')
   const [fatal, setFatal] = useState('')
@@ -1832,6 +2001,7 @@ export default function App() {
   const openProject = async (id: string): Promise<void> => {
     try {
       const value = await window.screenScript.loadProject(id)
+      setReviewStartAction(undefined)
       setProject(value)
       setScreen('review')
     } catch (cause) { setNotice(errorMessage(cause)) }
@@ -1934,6 +2104,8 @@ export default function App() {
           project={project}
           processing={projectBusy || Boolean(progress && progress.percent < 100)}
           notice={notice}
+          initialAction={reviewStartAction}
+          onInitialActionHandled={() => setReviewStartAction(undefined)}
           onProject={setProject}
           notify={setNotice}
           onBack={() => { setScreen('home'); refresh().catch(() => undefined) }}
@@ -1988,7 +2160,7 @@ export default function App() {
         <header className="home-header"><div><span className="eyebrow">SCREEN DESCRIPTION WORKSPACE</span><h1>작가의 시간을 대사 정리가 아닌<br /><em>화면해설</em>에 쓰세요.</h1><p>영상 속 음성과 화자를 분석해, 검수 가능한 타임스탬프 대본으로 정리합니다.</p></div><button className="settings-link" onClick={() => openAuxiliary('settings')}>설정</button></header>
         <ol className="workflow-steps" aria-label="대본 작업 3단계"><li><strong>1. 영상 선택</strong><span>사용 권리를 확인하고 대사 초안 준비</span></li><li><strong>2. 듣고 확인</strong><span>대사를 검수하고 화면해설 직접 작성</span></li><li><strong>3. 대본 저장</strong><span>확인 상태를 살펴 HWPX·SRT로 내보내기</span></li></ol>
         <div className="home-columns">
-          <div>{showNew ? <NewProjectPanel bootstrap={bootstrap} onOpenSettings={() => openAuxiliary('settings')} onCreated={(value) => { setProject(value); setScreen('review') }} /> : <EmptyState onNew={() => setShowNew(true)} />}</div>
+          <div>{showNew ? <NewProjectPanel bootstrap={bootstrap} onOpenSettings={() => openAuxiliary('settings')} onCreated={(value, startMode) => { setReviewStartAction(startMode === 'audio' ? undefined : startMode); setProject(value); setScreen('review') }} /> : <EmptyState onNew={() => setShowNew(true)} />}</div>
           <section className="recent-card">
             <div className="section-heading"><div><span className="eyebrow">RECENT</span><h2>최근 프로젝트</h2></div><span>{bootstrap.projects.length}개</span></div>
             <div className="recent-list">

@@ -1,3 +1,5 @@
+import type { SubtitlePreview, SubtitlePreviewOptions, SubtitleResolution, SubtitleWorkspace } from './subtitle-types'
+
 export type SourceKind = 'local' | 'youtube'
 export type ScriptRowKind = 'dialogue' | 'descriptionGap'
 export type ProjectStatus = 'draft' | 'processing' | 'review' | 'exported' | 'error'
@@ -100,6 +102,7 @@ export interface ScriptRow {
   speakers: string[]
   content: string
   sourceSegmentIds: string[]
+  sourceCueIds?: string[]
   reviewed: boolean
   reviewStatus?: 'unreviewed' | 'needsAttention' | 'approved'
   approvedAt?: string
@@ -218,6 +221,10 @@ export interface ExportProvenance {
   unresolvedSourceSegmentIds: string[]
   unattributedRowIds: string[]
   runId?: string
+  sourceAssetIds?: string[]
+  sourceImportIds?: string[]
+  unresolvedSourceCueIds?: string[]
+  subtitleAssets?: Array<{ id: string; sha256: string; sourceKind: 'provided-srt' | 'ocr-srt' }>
 }
 
 export interface ExportRecord extends Partial<ExportProvenance> {
@@ -248,6 +255,7 @@ export interface ScriptProject {
   exports: ExportRecord[]
   lastError?: string
   workflow?: ProjectWorkflow
+  subtitleWorkspace?: SubtitleWorkspace
 }
 
 export interface ProjectSummary {
@@ -368,6 +376,11 @@ export interface AppApi {
   chooseLocalMedia(): Promise<string | null>
   createProject(input: CreateProjectInput): Promise<ScriptProject>
   loadProject(id: string): Promise<ScriptProject>
+  prepareProjectMedia(id: string): Promise<ScriptProject>
+  previewSubtitleImport(id: string, expectedRevision: number, options?: SubtitlePreviewOptions): Promise<SubtitlePreview | null>
+  applySubtitleImport(id: string, previewId: string, offsetMs: number, resolutions: SubtitleResolution[], expectedRevision: number): Promise<ScriptProject>
+  discardSubtitlePreview(id: string, previewId: string): Promise<void>
+  shiftSubtitleRows(id: string, rowIds: string[], deltaMs: number, expectedRevision: number): Promise<ScriptProject>
   saveRows(id: string, rows: ScriptRow[], expectedRevision?: number): Promise<ScriptProject>
   setProjectConsent(id: string, consent: { rightsConfirmed: boolean; cloudAudioConsent: boolean; cloudCorrectionConsent: boolean }): Promise<ScriptProject>
   reviewRows(id: string, rowIds: string[], approved: boolean, expectedRevision: number): Promise<ScriptProject>

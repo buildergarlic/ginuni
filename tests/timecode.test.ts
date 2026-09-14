@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { ceilToSecond, floorToSecond, formatTimecode, intervalSeconds, parseTimecode } from '@shared/timecode'
+import { ceilToSecond, floorToSecond, formatTimecode, formatIntervalSeconds, intervalSeconds, parseTimecode } from '@shared/timecode'
 
 describe('timecode', () => {
+  it('formats subtitle durations without rounding a brief cue to zero seconds', () => {
+    expect(formatIntervalSeconds(1250, 1600)).toBe('0.35')
+    expect(formatIntervalSeconds(1250, 2875)).toBe('1.625')
+    expect(formatIntervalSeconds(1000, 3000)).toBe('2')
+  })
   it('preserves millisecond endpoints for short intervals and accepts fractional edits', () => {
     expect(formatTimecode(10_500)).toBe('00:10.500')
     expect(formatTimecode(400)).toBe('00:00.400')

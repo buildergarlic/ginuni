@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { formatTimecode } from '@shared/timecode'
 import { getReviewIssues, rowReviewStatus } from '@shared/workflow'
 import type { ProjectSnapshot, ScriptProject, ScriptRow } from '@shared/types'
+import { parseIntegerOffset } from './workflow-editing'
 
 const workflowLabels: Record<string, string> = {
   'before-bulk-edit': '여러 행 수정 전', 'before-restore': '이전 상태 복구 전', 'before-correction': '교정 제안 적용 전',
@@ -31,9 +32,16 @@ export function WorkflowPanel({ project, rows, selected, busy, mutate, action, c
   const [rights, setRights] = useState(Boolean(project.workflow?.consent.rightsConfirmedAt))
   const [audio, setAudio] = useState(Boolean(project.workflow?.consent.cloudAudioConsentAt))
   const [correction, setCorrection] = useState(Boolean(project.workflow?.consent.cloudCorrectionConsentAt))
+  const [shiftText, setShiftText] = useState('0')
+  const [shiftScope, setShiftScope] = useState<'selected' | 'all'>('all')
+  const [shiftError, setShiftError] = useState('')
   const issues = getReviewIssues({ ...project, rows })
   const remaining = rows.filter((row) => rowReviewStatus(row) !== 'approved')
   const sources = [...new Map([...project.runs.flatMap((run) => run.sourceSegments ?? []), ...project.segments].map((segment) => [segment.id, segment])).values()].filter((segment) => selected?.sourceSegmentIds.includes(segment.id))
+  const subtitleCues = project.subtitleWorkspace?.cues.filter((cue) => selected?.sourceCueIds?.includes(cue.id)) ?? []
+  const selectedSubtitleAssetId = subtitleCues[0]?.assetId ?? project.subtitleWorkspace?.activeAssetId
+  const activeSubtitleAsset = project.subtitleWorkspace?.assets.find((asset) => asset.id === selectedSubtitleAssetId)
+  const activeSubtitleImport = [...(project.subtitleWorkspace?.imports ?? [])].reverse().find((entry) => entry.assetId === activeSubtitleAsset?.id)
   const proposals = project.workflow?.proposals.filter((proposal) => proposal.rowId === selected?.id) ?? []
   return <section className="workflow-panel" aria-label="대본 확인과 기록">
     <h3>확인이 필요한 행 {remaining.length}개</h3>
@@ -44,9 +52,29 @@ export function WorkflowPanel({ project, rows, selected, busy, mutate, action, c
       </div>
       <p>대본 아래의 ‘확인 완료 · 다음’으로 확인을 기록합니다. 수정하면 확인 완료가 해제됩니다.</p>
       {issues.length > 0 && <details><summary>자동 점검 알림 {issues.length}개</summary><ul className="workflow-issues">{issues.map((issue) => <li key={issue.id}><span>{issue.severity === 'error' ? '오류' : '주의'}: {issue.message}</span>{issue.rowId && <button onClick={() => { const row = rows.find((entry) => entry.id === issue.rowId); if (row) choose(row) }}>해당 행으로 이동</button>}</li>)}</ul></details>}
-      <details><summary>선택한 행의 원래 음성 인식 결과</summary>
-        <p>원래 인식 결과도 틀릴 수 있습니다. 시간을 누르면 영상에서 확인합니다.</p>
-        {sources.length ? sources.map((segment) => <div className="source-segment" key={segment.id}><button onClick={() => seek(segment.startMs / 1000)}>{formatTimecode(segment.startMs)}–{formatTimecode(segment.endMs)} 재생</button><p>{segment.text}</p></div>) : <p>연결된 원본 구간이 없습니다.</p>}
+      <details><summary>선택한 행의 원문과 출처</summary>
+        {activeSubtitleAsset && <p className="source-origin-label">{activeSubtitleAsset.sourceKind === 'ocr-srt' ? '영상에서 추출한 자막' : '제공받은 자막'} · {activeSubtitleAsset.fileName}</p>}
+        <p>원래 자료도 틀릴 수 있습니다. 시간을 누르면 영상에서 확인합니다.</p>
+        {subtitleCues.map((cue) => <div className="source-segment" key={cue.id}><button onClick={() => seek((cue.startMs + (activeSubtitleImport?.offsetMs ?? 0)) / 1000)}>{formatTimecode(cue.startMs)}–{formatTimecode(cue.endMs)} 원본</button><p>{cue.text}</p></div>)}
+        {sources.map((segment) => <div className="source-segment" key={segment.id}><button onClick={() => seek(segment.startMs / 1000)}>{formatTimecode(segment.startMs)}–{formatTimecode(segment.endMs)} 재생</button><p>{segment.text}</p></div>)}
+        {sources.length === 0 && subtitleCues.length === 0 && <p>연결된 원본 구간이 없습니다.</p>}
+      </details>
+      <details><summary>대사 시간 전체 맞추기</summary>
+        <p>현재 편집된 대사 행을 지정한 밀리초만큼 한 번 이동합니다. 원본 자막 시간은 바뀌지 않으며, 이동한 행은 다시 확인해야 합니다.</p>
+        <div className="subtitle-shift-controls">
+          <label className="field-label">이동할 범위<select value={shiftScope} onChange={(event) => setShiftScope(event.target.value as typeof shiftScope)}><option value="all">모든 대사 행</option><option value="selected">선택한 대사 1행</option></select></label>
+          <label className="field-label">시간차 (ms)<input inputMode="numeric" value={shiftText} onChange={(event) => { setShiftText(event.target.value); setShiftError('') }} /></label>
+        </div>
+        {shiftError && <p className="error-text">{shiftError}</p>}
+        <button className="secondary-button" disabled={shiftScope === 'selected' && selected?.kind !== 'dialogue'} onClick={() => {
+          const deltaMs = parseIntegerOffset(shiftText)
+          if (deltaMs === null) { setShiftError('시간차는 유한한 정수 밀리초로 입력하세요.'); return }
+          if (deltaMs === 0) { setShiftError('0ms가 아닌 이동 값을 입력하세요.'); return }
+          const rowIds = shiftScope === 'all' ? rows.filter((row) => row.kind === 'dialogue').map((row) => row.id) : selected?.kind === 'dialogue' ? [selected.id] : []
+          if (rowIds.length === 0) { setShiftError('이동할 대사 행이 없습니다.'); return }
+          setShiftError('')
+          void mutate((revision) => window.screenScript.shiftSubtitleRows(project.id, rowIds, deltaMs, revision))
+        }}>대사 시간 이동</button>
       </details>
       <details open={!project.workflow?.consent.rightsConfirmedAt || undefined}><summary>사용 권리와 외부 전송 설정</summary>
         <label className="consent-check"><input type="checkbox" checked={rights} onChange={(event) => setRights(event.target.checked)} />이 영상·음성을 사용할 권리가 있습니다.</label>

@@ -54,7 +54,7 @@ describe('project store migrations', () => {
     expect(loaded.rows[0]).toMatchObject({ speakers: [], content: '대사' })
     expect(persisted.rows[0]).toMatchObject({ speakers: [], content: '대사' })
     expect(persisted.segments[0].speakerId).toBe('')
-    expect(persisted.schemaVersion).toBe(2)
+    expect(persisted.schemaVersion).toBe(3)
     expect(persisted.localDiarization).toEqual({ mode: 'none', speakerCount: null })
     expect(persisted.updatedAt).toBe(originalUpdatedAt)
   })

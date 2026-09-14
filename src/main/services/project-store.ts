@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { basename, join, relative, resolve } from 'node:path'
 import writeFileAtomic from 'write-file-atomic'
 import { APP_SCHEMA_VERSION, PROJECTS_DIRECTORY_NAME } from '@shared/constants'
@@ -8,6 +8,7 @@ import { removeLegacyLocalSpeakerLabels } from '@shared/rows'
 import { getReviewIssues, normalizeWorkflow, rowReviewStatus } from '@shared/workflow'
 import type { CreateProjectInput, LocalDiarizationConfig, ProjectSnapshot, ProjectSummary, ScriptProject, ScriptRow, TranscriptionEngine, WorkflowEvent } from '@shared/types'
 import { safeFileName } from './file-name'
+import { restoreSubtitleEvidence, validateSubtitleWorkspace } from './subtitle-workspace'
 
 const PROJECT_FILE = 'project.json'
 const DEFAULT_DIARIZATION: LocalDiarizationConfig = { mode: 'none', speakerCount: null }
@@ -39,9 +40,10 @@ function validateIncomingRows(rows: ScriptRow[]): void {
   const ids = new Set<string>()
   for (const row of rows) {
     if (!row || typeof row.id !== 'string' || !row.id || ids.has(row.id)
-      || !['dialogue', 'descriptionGap'].includes(row.kind) || !Number.isFinite(row.startMs) || !Number.isFinite(row.endMs)
+      || !['dialogue', 'descriptionGap'].includes(row.kind) || !Number.isSafeInteger(row.startMs) || !Number.isSafeInteger(row.endMs)
       || typeof row.content !== 'string' || !denseStrings(row.speakers)
-      || !denseStrings(row.sourceSegmentIds)) throw new Error('올바르지 않은 행 데이터입니다.')
+      || !denseStrings(row.sourceSegmentIds)
+      || (row.sourceCueIds !== undefined && !denseStrings(row.sourceCueIds))) throw new Error('올바르지 않은 행 데이터입니다.')
     ids.add(row.id)
   }
 }
@@ -51,7 +53,7 @@ function denseStrings(value: unknown): value is string[] {
 }
 
 function editable(row: ScriptRow): string {
-  return JSON.stringify([row.kind, row.startMs, row.endMs, row.speakers, row.content, row.sourceSegmentIds])
+  return JSON.stringify([row.kind, row.startMs, row.endMs, row.speakers, row.content, row.sourceSegmentIds, row.sourceCueIds ?? []])
 }
 function unapprove(row: ScriptRow): ScriptRow { return { ...row, reviewed: false, reviewStatus: 'unreviewed', approvedAt: undefined } }
 
@@ -129,7 +131,10 @@ export async function projectDirectory(id: string): Promise<string> {
 async function loadUnlocked(id: string): Promise<ScriptProject> {
   const directory = await projectDirectory(id)
   const project = JSON.parse(await readFile(join(directory, PROJECT_FILE), 'utf8')) as ScriptProject
+  if (!Number.isSafeInteger(project.schemaVersion) || project.schemaVersion < 1) throw new Error('프로젝트 버전이 올바르지 않습니다.')
+  if (project.schemaVersion > APP_SCHEMA_VERSION) throw new Error('더 새로운 버전에서 만든 프로젝트입니다. 앱을 업데이트해 주세요.')
   validateIncomingRows(project.rows)
+  validateSubtitleWorkspace(project.subtitleWorkspace)
   if (!Array.isArray(project.segments) || !Array.isArray(project.runs) || !Array.isArray(project.exports)
     || (project.workflow && (project.workflow.version !== 1 || !Number.isSafeInteger(project.workflow.revision) || project.workflow.revision < 0
       || !project.workflow.consent || !Array.isArray(project.workflow.events) || !Array.isArray(project.workflow.proposals)))) throw new Error('프로젝트 데이터가 올바르지 않습니다.')
@@ -142,6 +147,11 @@ async function loadUnlocked(id: string): Promise<ScriptProject> {
       }
     : legacyNormalized)
   if (normalized !== project) {
+    if (project.schemaVersion < APP_SCHEMA_VERSION) {
+      const backup = join(directory, `project-schema-v${project.schemaVersion}-backup.json`)
+      try { await writeFile(backup, `${JSON.stringify(project, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' }) }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    }
     await writeFileAtomic(join(directory, PROJECT_FILE), `${JSON.stringify(normalized, null, 2)}\n`, { encoding: 'utf8' })
   }
   return normalized
@@ -163,6 +173,7 @@ export async function updateProject(id: string, update: (project: ScriptProject)
 }
 
 export async function saveProject(project: ScriptProject, knownDirectory?: string): Promise<void> {
+  validateSubtitleWorkspace(project.subtitleWorkspace)
   const directory = knownDirectory ?? (await projectDirectory(project.id))
   project.updatedAt = new Date().toISOString()
   await writeFileAtomic(join(directory, PROJECT_FILE), `${JSON.stringify(project, null, 2)}\n`, { encoding: 'utf8' })
@@ -173,11 +184,15 @@ export async function saveRows(id: string, rows: ScriptRow[], expectedRevision?:
   const incoming = structuredClone(rows)
   return updateProject(id, async project => {
     revision(project, expectedRevision, true)
+    if (project.subtitleWorkspace || (project.segments.length === 0 && project.runs.length === 0)) {
+      const timingError = getReviewIssues({ ...project, rows: incoming }).find(issue => ['ROW_TIME', 'ROW_DURATION', 'ROW_ORDER', 'ROW_OVERLAP'].includes(issue.code))
+      if (timingError) throw new Error(timingError.message)
+    }
     const before = structuredClone(project.rows)
     const previous = new Map(before.map(row => [row.id, row]))
     const next = incoming.map(row => {
       const old = previous.get(row.id)
-      const safe: ScriptRow = { id: row.id, kind: row.kind, startMs: row.startMs, endMs: row.endMs, speakers: row.speakers, content: row.content, sourceSegmentIds: row.sourceSegmentIds, reviewed: false }
+      const safe: ScriptRow = { id: row.id, kind: row.kind, startMs: row.startMs, endMs: row.endMs, speakers: row.speakers, content: row.content, sourceSegmentIds: row.sourceSegmentIds, ...(row.sourceCueIds ? { sourceCueIds: row.sourceCueIds } : {}), reviewed: false }
       return old && editable(old) === editable(row) ? { ...safe, reviewed: rowReviewStatus(old) === 'approved', reviewStatus: rowReviewStatus(old), approvedAt: old.approvedAt } : unapprove(safe)
     })
     const nextIds = new Set(next.map(r => r.id))
@@ -227,13 +242,13 @@ export async function snapshotProject(project: ScriptProject, reason: string, kn
   // Keep creation order stable even when the clock has millisecond ties or moves backward.
   const createdAt = new Date(Math.max(Date.now(), existing[0] ? Date.parse(existing[0].createdAt) + 1 : 0)).toISOString()
   const snapshot: ProjectSnapshot = { id: randomUUID(), createdAt, reason, rowCount: project.rows.length }
-  await writeFileAtomic(join(directory, `${snapshot.id}.json`), JSON.stringify({ ...snapshot, projectId: project.id, rows: project.rows, proposals: project.workflow?.proposals ?? [], segments: project.segments }), { encoding: 'utf8' })
+  await writeFileAtomic(join(directory, `${snapshot.id}.json`), JSON.stringify({ ...snapshot, projectId: project.id, rows: project.rows, proposals: project.workflow?.proposals ?? [], segments: project.segments, subtitleWorkspace: project.subtitleWorkspace }), { encoding: 'utf8' })
   const entries = await readSnapshots(directory)
   for (const entry of entries.slice(10)) await rm(join(directory, `${entry.id}.json`))
   return snapshot
 }
 
-type StoredSnapshot = ProjectSnapshot & { projectId: string; rows: ScriptRow[]; proposals: NonNullable<ScriptProject['workflow']>['proposals']; segments: ScriptProject['segments'] }
+type StoredSnapshot = ProjectSnapshot & { projectId: string; rows: ScriptRow[]; proposals: NonNullable<ScriptProject['workflow']>['proposals']; segments: ScriptProject['segments']; subtitleWorkspace?: ScriptProject['subtitleWorkspace'] }
 
 async function readSnapshot(path: string, expectedId: string): Promise<StoredSnapshot> {
   try {
@@ -243,6 +258,7 @@ async function readSnapshot(path: string, expectedId: string): Promise<StoredSna
       || typeof data.projectId !== 'string' || !Array.isArray(data.rows) || data.rowCount !== data.rows.length
       || !Array.isArray(data.proposals) || !Array.isArray(data.segments)) throw new Error('invalid snapshot')
     validateIncomingRows(data.rows)
+    validateSubtitleWorkspace(data.subtitleWorkspace)
     if (data.proposals.some(p => !p || typeof p.id !== 'string' || typeof p.rowId !== 'string' || typeof p.before !== 'string'
       || typeof p.after !== 'string' || !['pending', 'applied', 'rejected', 'stale'].includes(p.status))) throw new Error('invalid proposals')
     return data
@@ -280,7 +296,11 @@ export async function restoreSnapshot(id: string, snapshotId: string, expectedRe
     validateIncomingRows(snapshot.rows)
     await snapshotProject(project, 'before-restore', directory)
     const before = structuredClone(project.rows)
+    const liveCues = new Map(project.subtitleWorkspace?.cues.map(c => [c.id, c]) ?? [])
+    const snapshotCues = new Map(snapshot.subtitleWorkspace?.cues.map(c => [c.id, c]) ?? [])
     const sourceMatches = JSON.stringify(snapshot.segments) === JSON.stringify(project.segments)
+      && snapshot.rows.flatMap(r => r.sourceCueIds ?? []).every(cueId => snapshotCues.has(cueId) && JSON.stringify(snapshotCues.get(cueId)) === JSON.stringify(liveCues.get(cueId)))
+    project.subtitleWorkspace = restoreSubtitleEvidence(project.subtitleWorkspace, snapshot.subtitleWorkspace)
     project.rows = snapshot.rows.map(row => sourceMatches ? row : unapprove(row))
     project.workflow!.proposals = snapshot.proposals.map(p => p.status === 'pending' && (!sourceMatches || !project.rows.some(r => r.id === p.rowId && r.content === p.before)) ? { ...p, status: 'stale' } : p)
     audit(project, 'snapshot-restored', before, snapshotId)

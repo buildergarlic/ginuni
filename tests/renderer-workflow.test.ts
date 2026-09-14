@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { inspectInlineDraft, prepareEditedRows, savePendingEdits, scheduleDraftSave } from '../src/renderer/src/workflow-editing'
+import { inspectInlineDraft, inspectManualRowDraft, parseIntegerOffset, prepareEditedRows, savePendingEdits, scheduleDraftSave } from '../src/renderer/src/workflow-editing'
 import type { ScriptProject, ScriptRow } from '../src/shared/types'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -48,9 +48,37 @@ describe('writer workspace accessible output', () => {
     expect(document.documentElement?.textContent).toContain('한글 문서 · 대사와 화면해설')
     expect(document.documentElement?.textContent).toContain('자막 파일 · 대사만')
   })
+  it('offers subtitle import and a temporary first-row form in an empty workspace', () => {
+    const document = reviewMarkup([])
+    expect(document.documentElement?.textContent).toContain('자막 파일로 시작')
+    expect(document.documentElement?.textContent).toContain('대사를 직접 입력')
+  })
 })
 
 describe('writer edits', () => {
+  it('keeps a first manual row temporary until both times form a valid interval', () => {
+    expect(inspectManualRowDraft({ kind: 'dialogue', start: '', end: '', content: '붙여 넣은 대사' }).row).toBeNull()
+    expect(inspectManualRowDraft({ kind: 'dialogue', start: '00:05', end: '00:04', content: '붙여 넣은 대사' }).errors.end).toBeTruthy()
+
+    const ready = inspectManualRowDraft({ kind: 'dialogue', start: '00:05.250', end: '00:07', content: '붙여 넣은 대사' })
+    expect(ready.errors).toEqual({})
+    expect(ready.row).toMatchObject({ kind: 'dialogue', startMs: 5250, endMs: 7000, content: '붙여 넣은 대사' })
+  })
+
+  it('requires meaningful content without inventing a timestamp or no-voice description', () => {
+    const inspected = inspectManualRowDraft({ kind: 'descriptionGap', start: '00:00', end: '00:02', content: '   ' })
+    expect(inspected.row).toBeNull()
+    expect(inspected.errors.content).toBeTruthy()
+  })
+
+  it('accepts only explicit finite integer millisecond offsets', () => {
+    expect(parseIntegerOffset('1500')).toBe(1500)
+    expect(parseIntegerOffset('-3600000')).toBe(-3600000)
+    expect(parseIntegerOffset('')).toBeNull()
+    expect(parseIntegerOffset('1.5')).toBeNull()
+    expect(parseIntegerOffset('Infinity')).toBeNull()
+  })
+
   it('uses a readable new-profile font while preserving a saved writer preference', () => {
     expect(initialReviewFontSize(null)).toBe(16)
     expect(initialReviewFontSize('')).toBe(16)
@@ -109,6 +137,12 @@ describe('writer edits', () => {
     expect(result[0].reviewStatus).toBe('approved')
     expect(result[1].reviewed).toBe(false)
     const changed = prepareEditedRows([row], [{ ...row, content: '수정' }])[0]
+    expect(changed.reviewStatus).toBe('unreviewed')
+    expect(changed.approvedAt).toBeUndefined()
+  })
+  it('clears approval when subtitle source references change', () => {
+    const withCue = { ...row, sourceCueIds: ['cue-1'] }
+    const changed = prepareEditedRows([withCue], [{ ...withCue, sourceCueIds: ['cue-2'] }])[0]
     expect(changed.reviewStatus).toBe('unreviewed')
     expect(changed.approvedAt).toBeUndefined()
   })

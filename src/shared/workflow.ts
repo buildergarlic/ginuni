@@ -1,4 +1,4 @@
-import { DESCRIPTION_TEXT } from './constants'
+import { DESCRIPTION_CANDIDATE_TEXT, DESCRIPTION_TEXT } from './constants'
 import type { ReviewIssue, ScriptProject, ScriptRow, TranscriptSegment } from './types'
 
 export function rowReviewStatus(row: ScriptRow): NonNullable<ScriptRow['reviewStatus']> {
@@ -28,21 +28,26 @@ export function validateSegments(segments: TranscriptSegment[], durationMs: numb
 export function getReviewIssues(project: ScriptProject): ReviewIssue[] {
   const issues: ReviewIssue[] = []
   const sources = new Set([...project.segments, ...project.runs.flatMap(run => run.sourceSegments ?? [])].map(s => s.id))
+  const subtitleSources = new Set(project.subtitleWorkspace?.cues.map(cue => cue.id) ?? [])
   const seen = new Set<string>()
   const expectsSpeakers = project.localDiarization?.mode === 'sherpa-onnx' || project.runs.some(r => r.diarization?.status === 'succeeded' || r.provider === 'openai')
+  // Legacy speech drafts round outward to seconds; direct subtitle/manual drafts do not.
+  const preciseTimeline = Boolean(project.subtitleWorkspace) || (project.segments.length === 0 && project.runs.length === 0)
+  const durationLimit = preciseTimeline ? project.media.durationMs : Math.ceil(project.media.durationMs / 1000) * 1000
   project.rows.forEach((row, i) => {
     const add = (code: string, message: string, severity: ReviewIssue['severity'] = 'error') => issues.push({ id: `${code}-${i}`, rowId: row.id, code, severity, message })
     if (!row.id || seen.has(row.id)) add('ROW_ID', '행 ID가 없거나 중복됩니다.')
     seen.add(row.id)
-    if (!Number.isFinite(row.startMs) || !Number.isFinite(row.endMs) || row.startMs < 0 || row.endMs <= row.startMs) add('ROW_TIME', '행의 시작·종료 시간을 확인하세요.')
-    if (project.media.durationMs > 0 && row.endMs > Math.ceil(project.media.durationMs / 1000) * 1000) add('ROW_DURATION', '행이 영상 길이를 넘습니다.')
+    if (!Number.isSafeInteger(row.startMs) || !Number.isSafeInteger(row.endMs) || row.startMs < 0 || row.endMs <= row.startMs) add('ROW_TIME', '행의 시작·종료 시간을 정수 밀리초로 확인하세요.')
+    if (project.media.durationMs > 0 && row.endMs > durationLimit) add('ROW_DURATION', '행이 영상 길이를 넘습니다.')
     if (i > 0 && row.startMs < project.rows[i - 1].startMs) add('ROW_ORDER', '행의 시간 순서를 확인하세요.')
     if (i > 0 && row.startMs < project.rows[i - 1].endMs) add('ROW_OVERLAP', '앞 행과 시간이 겹칩니다.')
     if (!row.content.trim() && row.kind === 'dialogue') add('ROW_TEXT', '대사 내용이 비어 있습니다.')
     if (row.sourceSegmentIds.some(id => !sources.has(id))) add('ROW_SOURCE', '연결된 원본 구간을 확인하세요.')
-    if (row.kind === 'dialogue' && row.sourceSegmentIds.length === 0) add('ROW_SOURCE_MISSING', '직접 작성한 대사를 영상과 대조하세요. 연결된 인식 원문은 없습니다.', 'warning')
-    if (row.kind === 'dialogue' && expectsSpeakers && !row.speakers.some(s => s.trim())) add('ROW_SPEAKER', '화자 표기를 확인하세요.', 'warning')
-    if (row.kind === 'descriptionGap' && (!row.content.trim() || row.content.trim() === DESCRIPTION_TEXT)) add('DESCRIPTION_PENDING', '작가가 화면해설을 작성할 자리입니다.', 'warning')
+    if (row.sourceCueIds?.some(id => !subtitleSources.has(id))) add('ROW_SOURCE', '연결된 원본 자막을 확인하세요.')
+    if (row.kind === 'dialogue' && row.sourceSegmentIds.length === 0 && !row.sourceCueIds?.length) add('ROW_SOURCE_MISSING', '직접 작성한 대사를 영상과 대조하세요. 연결된 인식 원문은 없습니다.', 'warning')
+    if (row.kind === 'dialogue' && expectsSpeakers && !row.sourceCueIds?.length && !row.speakers.some(s => s.trim())) add('ROW_SPEAKER', '화자 표기를 확인하세요.', 'warning')
+    if (row.kind === 'descriptionGap' && (!row.content.trim() || [DESCRIPTION_TEXT, DESCRIPTION_CANDIDATE_TEXT].includes(row.content.trim()))) add('DESCRIPTION_PENDING', '작가가 화면해설을 작성할 자리입니다.', 'warning')
     if (rowReviewStatus(row) !== 'approved') add('REVIEW_PENDING', '영상과 대조하여 대사·고유명사·숫자·화자·시간을 검수한 뒤 승인하세요. 자동 검사는 정확도를 보증하지 않습니다.', 'warning')
   })
   return issues

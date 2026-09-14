@@ -120,6 +120,58 @@ button:focus-visible, summary:focus-visible, a:focus-visible, input:focus-visibl
 .workflow-panel button { font-size: 14px; padding: 9px 12px; }
 .workflow-panel .consent-check { font-size: 14px; }
 .workflow-panel h3, .edit-card h3 { font-size: 17px; }
+.draft-source-actions { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.draft-source-actions h3 { margin: 0 0 8px; font-size: 17px; }
+.draft-source-actions p { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
+.empty-draft-actions { margin-bottom: 16px; padding: 20px; border: 1px solid #bed7d0; border-radius: 9px; background: #f1f8f6; }
+.empty-draft-actions h3, .manual-row-composer h3 { margin: 0; font-size: 18px; }
+.empty-draft-actions p, .manual-row-heading p { margin: 6px 0 14px; color: var(--muted); font-size: 14px; }
+.manual-row-composer { margin-bottom: 16px; padding: 20px; border: 1px solid var(--line); border-radius: 9px; background: #fafbf9; }
+.manual-row-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.manual-row-heading .icon-button { padding: 8px; }
+.manual-time-grid, .subtitle-option-grid, .subtitle-shift-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
+.manual-time-grid label, .manual-row-composer > label, .subtitle-option-grid label, .subtitle-shift-controls label { display: grid; gap: 6px; }
+.manual-time-grid input, .manual-row-composer textarea, .subtitle-option-grid select, .subtitle-offset input, .subtitle-shift-controls input, .subtitle-shift-controls select { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid #cfd8d3; border-radius: 7px; background: white; color: var(--ink); }
+.manual-row-composer textarea { min-height: 110px; resize: vertical; }
+.source-origin-label { display: inline-block; padding: 5px 8px; border-radius: 6px; background: var(--green-bright); color: var(--green); font-weight: 500; }
+.subtitle-import-dialog { position: fixed; inset: 20px; z-index: 120; width: min(860px, calc(100vw - 40px)); max-width: none; max-height: calc(100dvh - 40px); margin: auto; padding: 24px; overflow-y: auto; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); background: white; box-shadow: 0 20px 70px #142c2466; }
+.subtitle-import-dialog::backdrop { background: #20352c70; }
+.subtitle-import-dialog:not([open]) { display: none; }
+.subtitle-dialog-heading, .subtitle-dialog-actions { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
+.subtitle-dialog-heading h2 { margin: 0; font-size: 24px; }
+.subtitle-dialog-heading p, .subtitle-preview-list > p, .subtitle-offset p, .subtitle-overlaps > p { margin: 6px 0 14px; color: var(--muted); font-size: 14px; }
+.subtitle-dialog-heading .icon-button { min-width: 40px; min-height: 40px; font-size: 24px; }
+.subtitle-dialog-error { margin: 14px 0 0; padding: 11px 12px; border: 1px solid #efc7bd; border-radius: 7px; background: #fff0ed; }
+.subtitle-option-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.subtitle-summary { margin: 20px 0 0; padding: 16px; border: 1px solid var(--line); border-radius: 9px; background: #fafbf9; }
+.subtitle-summary > div strong, .subtitle-summary > div span { display: block; }
+.subtitle-summary > div span { color: var(--muted); font-size: 14px; }
+.subtitle-summary dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 14px 0 0; }
+.subtitle-summary dl div { padding: 10px; background: white; border: 1px solid var(--line); border-radius: 7px; }
+.subtitle-summary dt { color: var(--muted); font-size: 12px; }
+.subtitle-summary dd { margin: 2px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.subtitle-offset, .subtitle-overlaps, .subtitle-preview-list, .subtitle-issues { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+.subtitle-offset h3, .subtitle-overlaps h3, .subtitle-preview-list h3 { margin: 0; font-size: 18px; }
+.subtitle-offset > label { display: grid; gap: 6px; max-width: 260px; }
+.sync-checkpoints { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.sync-checkpoints > div, .subtitle-overlaps article { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fafbf9; min-width: 0; }
+.sync-checkpoints span { display: block; color: var(--green); font-size: 13px; font-variant-numeric: tabular-nums; }
+.sync-checkpoints p, .subtitle-overlaps article p { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.subtitle-overlaps { color: #6f3330; }
+.subtitle-overlaps article { margin-top: 10px; background: #fff8f5; border-color: #efc7bd; }
+.subtitle-issues summary { cursor: pointer; font-weight: 600; }
+.subtitle-issues ul { max-height: 240px; overflow-y: auto; margin: 10px 0; padding-left: 22px; }
+.subtitle-issues li { margin-bottom: 10px; }
+.subtitle-issues li strong, .subtitle-issues li span { margin-right: 8px; }
+.subtitle-issues li p { margin: 2px 0; }
+.subtitle-preview-list ol { max-height: 360px; overflow-y: auto; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 8px; }
+.subtitle-preview-list li { display: grid; grid-template-columns: 155px minmax(0, 1fr); gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.subtitle-preview-list li:last-child { border-bottom: 0; }
+.subtitle-preview-list time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.subtitle-preview-list span { white-space: pre-wrap; overflow-wrap: anywhere; }
+.subtitle-dialog-actions { position: sticky; bottom: -24px; align-items: center; margin: 20px -24px -24px; padding: 16px 24px; border-top: 1px solid var(--line); background: white; }
+.subtitle-dialog-actions p { margin: 0; color: var(--muted); font-size: 14px; }
+.subtitle-dialog-actions > div { display: flex; gap: 8px; flex-shrink: 0; }
 .edit-card-heading span { font-size: 14px; font-weight: 500; }
 .processing-controls { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 14px; padding: 18px 28px; border-top: 1px solid var(--line); background: #fff; }
 .processing-controls .floating-analysis-options, .processing-controls .floating-process { position: static; margin: 0; font-size: 15px; box-shadow: none; }
@@ -163,6 +215,11 @@ button:focus-visible, summary:focus-visible, a:focus-visible, input:focus-visibl
   .settings-card, .info-card { padding: 26px; }
 }
 @media (max-width: 600px) {
+  .manual-time-grid, .subtitle-option-grid, .subtitle-shift-controls, .sync-checkpoints, .subtitle-summary dl { grid-template-columns: minmax(0, 1fr); }
+  .subtitle-import-dialog { inset: 8px; width: calc(100vw - 16px); max-height: calc(100dvh - 16px); padding: 18px; }
+  .subtitle-dialog-actions { align-items: stretch; flex-direction: column; margin: 18px -18px -18px; bottom: -18px; padding: 14px 18px; }
+  .subtitle-dialog-actions > div { justify-content: flex-end; }
+  .subtitle-preview-list li { grid-template-columns: minmax(0, 1fr); gap: 3px; }
   .media-panel { grid-template-columns: minmax(0, 1fr); }
   .review-title .back-button { border: 0; padding-right: 0; }
   .review-actions { gap: 8px; }

@@ -1,7 +1,7 @@
 import { DOMParser, XMLSerializer, type Document as XmlDocument, type Element as XmlElement } from '@xmldom/xmldom'
 import { basename, join } from 'node:path'
 import { DESCRIPTION_TEXT } from '@shared/constants'
-import { formatTimecode, intervalSeconds } from '@shared/timecode'
+import { formatTimecode, formatIntervalSeconds } from '@shared/timecode'
 import type { ScriptRow } from '@shared/types'
 import { nextVersionedExportPath } from './export-path'
 import { readZipEntries, writeZipEntries } from './zip'
@@ -113,7 +113,7 @@ function rowValues(row: ScriptRow): string[] {
     row.kind === 'dialogue' ? '대사' : '해설',
     formatTimecode(row.startMs),
     formatTimecode(row.endMs),
-    String(intervalSeconds(row.startMs, row.endMs)),
+    formatIntervalSeconds(row.startMs, row.endMs),
     row.kind === 'descriptionGap' && !row.content.trim() ? DESCRIPTION_TEXT : row.content
   ]
 }

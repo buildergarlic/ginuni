@@ -1,5 +1,5 @@
 export const APP_NAME = '화면해설 대본 도구'
-export const APP_SCHEMA_VERSION = 2
+export const APP_SCHEMA_VERSION = 3
 export const OPENAI_MODEL = 'gpt-4o-transcribe-diarize'
 export const LOCAL_MODEL_NAME = 'Whisper small (다국어, Q5)'
 export const LOCAL_MODEL_FILE = 'ggml-small-q5_1.bin'
@@ -22,6 +22,7 @@ export const TARGET_UPLOAD_BYTES = 23_500_000
 export const DESCRIPTION_GAP_MS = 2_000
 export const MAX_DIALOGUE_ROW_MS = 60_000
 export const DESCRIPTION_TEXT = '※ (사람 목소리 없음) 해설 삽입 권장 구간'
+export const DESCRIPTION_CANDIDATE_TEXT = '※ 해설 후보 · 대사와 소리를 확인하세요'
 export const PROJECTS_DIRECTORY_NAME = '화면해설 대본 도구'
 export const YOUTUBE_CLIENT_IDENTITY = 'https://github.com/buildergarlic/ginuni'
 export const LOCAL_MODEL_REPAIR_MIN_FREE_MEMORY_BYTES = 256 * 1024 * 1024

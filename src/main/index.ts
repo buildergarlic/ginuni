@@ -8,6 +8,8 @@ import { supportsSpeakerLabels } from '@shared/speaker-labels'
 import type { AppApi, CreateProjectInput, ExternalLinkTarget, LocalDiarizationConfig, LocalModelStatus, ModelDownloadProgress, ProcessingProgress, ProcessingRun, ProcessingWarning, ScriptProject, ScriptRow, TranscriptionEngine } from '@shared/types'
 import { buildHwpx, nextVersionedHwpxPath } from './services/hwpx'
 import { prepareMedia } from './services/media'
+import { prepareProjectMedia, previewSubtitleFile, applySubtitleImport, discardSubtitlePreview, shiftSubtitleRows } from './services/subtitle-ingestion'
+import type { SubtitlePreviewOptions, SubtitleResolution } from '@shared/subtitle-types'
 import { createMediaProtocolHandler } from './services/media-protocol'
 import { LocalWhisperTranscriptionProvider } from './services/local-transcription'
 import { deleteLocalModel, ensureLocalModel, localModelStatus } from './services/local-model'
@@ -396,6 +398,14 @@ function registerIpc(): void {
 
   ipcMain.handle('project:create', (_event, input: CreateProjectInput) => createProject(input))
   ipcMain.handle('project:load', (_event, id: string) => loadProject(id))
+  ipcMain.handle('project:prepare-media', (_event, id: string) => withProjectJob(id, signal => prepareProjectMedia(id, signal)))
+  ipcMain.handle('project:preview-subtitle', (_event, id: string, revision: number, options?: SubtitlePreviewOptions) => withProjectJob(id, async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, { title: '한국어 SRT 자막 선택', properties: ['openFile'], filters: [{ name: 'SRT 자막', extensions: ['srt'] }] })
+    return result.canceled || !result.filePaths[0] ? null : previewSubtitleFile(id, result.filePaths[0], revision, options)
+  }))
+  ipcMain.handle('project:apply-subtitle', (_event, id: string, previewId: string, offsetMs: number, resolutions: SubtitleResolution[], revision: number) => withProjectJob(id, signal => applySubtitleImport(id, previewId, offsetMs, resolutions, revision, signal)))
+  ipcMain.handle('project:discard-subtitle-preview', (_event, id: string, previewId: string) => discardSubtitlePreview(id, previewId))
+  ipcMain.handle('project:shift-subtitle-rows', (_event, id: string, rowIds: string[], deltaMs: number, revision: number) => withProjectJob(id, () => shiftSubtitleRows(id, rowIds, deltaMs, revision)))
   ipcMain.handle('project:save-rows', (_event, id: string, rows: ScriptRow[], revision?: number) => { assertProjectIdle(id); return saveRows(id, rows, revision) })
   ipcMain.handle('project:set-engine', (_event, id: string, engine: TranscriptionEngine) => { assertProjectIdle(id); return setTranscriptionEngine(id, engine) })
   ipcMain.handle('project:set-local-diarization', (_event, id: string, config: LocalDiarizationConfig) => { assertProjectIdle(id); return setLocalDiarizationConfig(id, config) })
@@ -433,6 +443,7 @@ function registerIpc(): void {
       format: 'ginuni-evidence-v1', exportedAt: new Date().toISOString(), projectId: project.id,
       notice: '자동 검사와 해시는 내용의 정확성 또는 법적 권리를 보증하지 않습니다. 로컬 기록이며 전자서명이 아닙니다.',
       source: { kind: project.source.kind, sha256: project.source.sha256 }, durationMs: project.media.durationMs,
+      subtitleWorkspace: project.subtitleWorkspace,
       rows: project.rows, segments: project.segments, runs: project.runs, workflow: project.workflow,
       exports: project.exports.map(({ path: _path, ...entry }) => entry)
     }

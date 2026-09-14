@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest'
 
 import {
+  mergeSourceReferences,
   parseYouTubeMessage,
+  playheadMilliseconds,
+  sourceReferencesForSplit,
   splitSourceSegments,
   splitTextForDurationPoint
 } from '../src/renderer/src/App'
@@ -73,6 +76,26 @@ describe('splitSourceSegments', () => {
     const [left, right] = splitSourceSegments(['only'], row, 5000)
     expect(left).toEqual(['only'])
     expect(right).toEqual([])
+  })
+})
+
+describe('playheadMilliseconds', () => {
+  it('preserves the current player position at millisecond precision', () => {
+    expect(playheadMilliseconds(1.2344)).toBe(1234)
+    expect(playheadMilliseconds(1.2346)).toBe(1235)
+  })
+})
+
+describe('subtitle source references while editing', () => {
+  it('keeps every source cue on both halves of a split row', () => {
+    const [left, right] = sourceReferencesForSplit(['cue-1', 'cue-2'])
+    expect(left).toEqual(['cue-1', 'cue-2'])
+    expect(right).toEqual(['cue-1', 'cue-2'])
+    expect(left).not.toBe(right)
+  })
+
+  it('merges cue references as an ordered union', () => {
+    expect(mergeSourceReferences(['cue-1', 'cue-2'], ['cue-2', 'cue-3'])).toEqual(['cue-1', 'cue-2', 'cue-3'])
   })
 })
 
