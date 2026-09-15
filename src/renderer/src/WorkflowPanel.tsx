@@ -8,6 +8,7 @@ const workflowLabels: Record<string, string> = {
   'before-bulk-edit': '여러 행 수정 전', 'before-restore': '이전 상태 복구 전', 'before-correction': '교정 제안 적용 전',
   'before-processing': '음성 분석 전', 'before-analysis': '음성 분석 전',
   'rows-edited': '대본 수정', 'rows-approved': '행 확인 완료', 'approval-cleared': '확인 완료 취소',
+  'description-candidates-added': '해설 후보 추가', 'subtitles-imported': '자막 가져오기', 'subtitle-time-shifted': '대사 시간 이동',
   'consent-changed': '사용 권리·외부 전송 설정 변경', 'snapshot-restored': '이전 대본 복구',
   'correction-apply': '교정 제안 적용', 'correction-reject': '교정 제안 거절', 'correction-proposed': '교정 제안 도착',
   'workflow-migrated': '이전 프로젝트의 확인 기록 준비', 'export-completed': '대본 파일 저장',
@@ -59,8 +60,13 @@ export function WorkflowPanel({ project, rows, selected, busy, mutate, action, c
         {sources.map((segment) => <div className="source-segment" key={segment.id}><button onClick={() => seek(segment.startMs / 1000)}>{formatTimecode(segment.startMs)}–{formatTimecode(segment.endMs)} 재생</button><p>{segment.text}</p></div>)}
         {sources.length === 0 && subtitleCues.length === 0 && <p>연결된 원본 구간이 없습니다.</p>}
       </details>
+      <details><summary>빈 시간에 해설 후보 넣기</summary>
+        <p>기존 대사와 작성한 해설을 보존하고, 영상의 시작·끝과 행 사이에서 2초 이상 비는 시간에 해설 후보를 추가합니다. 이미 있는 구간에 중복해서 넣지 않습니다.</p>
+        <p>후보는 무음 판정이나 완성된 해설이 아닙니다. 대사·음악·효과음을 들으며 사용할 위치와 내용을 정하세요.</p>
+        <button className="secondary-button" disabled={project.source.kind !== 'local' || rows.length === 0 || !project.media?.durationMs || !project.workflow?.consent.rightsConfirmedAt} onClick={() => void mutate((revision) => window.screenScript.addDescriptionCandidates(project.id, revision))}>빈 시간에 해설 후보 넣기</button>
+      </details>
       <details><summary>대사 시간 전체 맞추기</summary>
-        <p>현재 편집된 대사 행을 지정한 밀리초만큼 한 번 이동합니다. 원본 자막 시간은 바뀌지 않으며, 이동한 행은 다시 확인해야 합니다.</p>
+        <p>현재 편집된 대사 행을 지정한 밀리초만큼 한 번 이동합니다. 아직 수정·확인하지 않은 자동 해설 후보는 바뀐 빈 시간에 맞춰 다시 배치하고, 작성한 해설은 그대로 둡니다. 원본 자막 시간은 바뀌지 않으며, 이동한 행은 다시 확인해야 합니다.</p>
         <div className="subtitle-shift-controls">
           <label className="field-label">이동할 범위<select value={shiftScope} onChange={(event) => setShiftScope(event.target.value as typeof shiftScope)}><option value="all">모든 대사 행</option><option value="selected">선택한 대사 1행</option></select></label>
           <label className="field-label">시간차 (ms)<input inputMode="numeric" value={shiftText} onChange={(event) => { setShiftText(event.target.value); setShiftError('') }} /></label>

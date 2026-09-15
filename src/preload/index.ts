@@ -11,6 +11,7 @@ const api: AppApi = {
   applySubtitleImport: (id, previewId, offsetMs, resolutions, revision) => ipcRenderer.invoke('project:apply-subtitle', id, previewId, offsetMs, resolutions, revision),
   discardSubtitlePreview: (id, previewId) => ipcRenderer.invoke('project:discard-subtitle-preview', id, previewId),
   shiftSubtitleRows: (id, rowIds, deltaMs, revision) => ipcRenderer.invoke('project:shift-subtitle-rows', id, rowIds, deltaMs, revision),
+  addDescriptionCandidates: (id, revision) => ipcRenderer.invoke('project:add-description-candidates', id, revision),
   saveRows: (id, rows, revision) => ipcRenderer.invoke('project:save-rows', id, rows, revision),
   setProjectConsent: (id, consent) => ipcRenderer.invoke('project:set-consent', id, consent),
   reviewRows: (id, rowIds, approved, revision) => ipcRenderer.invoke('project:review-rows', id, rowIds, approved, revision),

@@ -5,6 +5,7 @@ import writeFileAtomic from 'write-file-atomic'
 import type { ScriptProject } from '@shared/types'
 import type { SubtitlePreview, SubtitlePreviewOptions, SubtitleResolution } from '@shared/subtitle-types'
 import { generateSubtitleRows, validateSubtitleCues, validateSubtitleRows } from '@shared/subtitle-rows'
+import { addDescriptionCandidates, isUntouchedSubtitleGap } from '@shared/description-candidates'
 import { decodeSubtitleBytes, parseSrt } from './subtitle-import'
 import { loadProject, projectDirectory, snapshotProject, updateProject } from './project-store'
 import { fileSha256 } from './file-hash'
@@ -91,9 +92,10 @@ export async function applySubtitleImport(id: string, previewId: string, offsetM
   if (currentFile.size > MAX_BYTES || hash(await readFile(entry.filePath)) !== preview.asset.sha256) throw new Error('미리보기 이후 자막 파일이 변경되었습니다. 다시 가져와 주세요.')
   const mediaHash = await fileSha256(baseline.source.localMediaPath ?? baseline.source.uri, signal)
   if (mediaHash !== entry.mediaHash || baseline.source.sha256 !== entry.mediaHash) throw new Error('원본 영상이 변경되었습니다. 기존 대본은 보존했습니다.')
-  const rows = generateSubtitleRows(preview.cues, offsetMs, resolutions)
-  const errors = validateSubtitleRows(rows, baseline.media.durationMs).filter(issue => issue.severity === 'error')
-  if (!rows.length || errors.length) throw new Error(errors[0]?.message ?? '적용할 자막이 없습니다.')
+  const dialogue = generateSubtitleRows(preview.cues, offsetMs, resolutions)
+  const errors = validateSubtitleRows(dialogue, baseline.media.durationMs).filter(issue => issue.severity === 'error')
+  if (!dialogue.length || errors.length) throw new Error(errors[0]?.message ?? '적용할 자막이 없습니다.')
+  const rows = addDescriptionCandidates(dialogue, baseline.media.durationMs)
   abort(signal)
   const result = await updateProject(id, async project => {
     checkRevision(project, expectedRevision)
@@ -118,10 +120,26 @@ export async function applySubtitleImport(id: string, previewId: string, offsetM
     project.status = 'review'
     delete project.lastError
     project.workflow!.proposals = project.workflow!.proposals.map(p => p.status === 'pending' ? { ...p, status: 'stale' } : p)
-    project.workflow!.events.push({ id: randomUUID(), at: importedAt, action: 'subtitles-imported', actor: 'writer', rowIds: rows.map(r => r.id), detail: `${preview.cues.length}개 원본 자막 → ${rows.length}개 대사 행 · ${offsetMs}ms 보정 · ${record.id}` })
+    project.workflow!.events.push({ id: randomUUID(), at: importedAt, action: 'subtitles-imported', actor: 'writer', rowIds: rows.map(r => r.id), detail: `${preview.cues.length}개 원본 자막 → 대사 ${dialogue.length}행 · 해설 후보 ${rows.length - dialogue.length}행 · ${offsetMs}ms 보정 · ${record.id}` })
   })
   pending.delete(previewId)
   return result
+}
+
+export async function addProjectDescriptionCandidates(id: string, expectedRevision: number): Promise<ScriptProject> {
+  return updateProject(id, async project => {
+    checkRevision(project, expectedRevision)
+    requireReady(project)
+    const rows = addDescriptionCandidates(project.rows, project.media.durationMs)
+    const existingIds = new Set(project.rows.map(row => row.id))
+    const added = rows.filter(row => !existingIds.has(row.id))
+    if (!added.length) return
+    await snapshotProject(project, '해설 후보 추가 전')
+    project.rows = rows
+    project.status = 'review'
+    project.workflow!.events.push({ id: randomUUID(), at: new Date().toISOString(), action: 'description-candidates-added', actor: 'writer', rowIds: added.map(row => row.id), detail: `해설 후보 ${added.length}행 추가 · 대사와 소리 확인 필요`,
+      changes: added.map(after => ({ rowId: after.id, after: structuredClone(after) })) })
+  })
 }
 
 export async function shiftSubtitleRows(id: string, rowIds: string[], deltaMs: number, expectedRevision: number): Promise<ScriptProject> {
@@ -133,15 +151,22 @@ export async function shiftSubtitleRows(id: string, rowIds: string[], deltaMs: n
     const ids = new Set(rowIds)
     const currentRows = new Map(project.rows.map(row => [row.id, row]))
     if (rowIds.some(rowId => !currentRows.has(rowId))) throw new Error('이동할 행을 찾을 수 없습니다.')
-    const rows = project.rows.map(row => ids.has(row.id) ? { ...row, startMs: row.startMs + deltaMs, endMs: row.endMs + deltaMs, reviewed: false, reviewStatus: 'unreviewed' as const, approvedAt: undefined } : row)
+    const rebuildCandidates = Boolean(project.subtitleWorkspace) || project.rows.some(isUntouchedSubtitleGap)
+    const retained = project.rows.filter(row => ids.has(row.id) || !isUntouchedSubtitleGap(row))
+    const shifted = retained.map(row => ids.has(row.id) ? { ...row, startMs: row.startMs + deltaMs, endMs: row.endMs + deltaMs, subtitleGapCandidate: undefined, reviewed: false, reviewStatus: 'unreviewed' as const, approvedAt: undefined } : row)
       .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)
-    const errors = validateSubtitleRows(rows, project.media.durationMs).filter(issue => issue.severity === 'error')
+    const errors = validateSubtitleRows(shifted, project.media.durationMs).filter(issue => issue.severity === 'error')
     if (errors.length) throw new Error(errors[0].message)
+    const rows = rebuildCandidates ? addDescriptionCandidates(shifted, project.media.durationMs) : shifted
     await snapshotProject(project, '자막 시간 이동 전')
     project.rows = rows
-    project.workflow!.proposals = project.workflow!.proposals.map(p => p.status === 'pending' && ids.has(p.rowId) ? { ...p, status: 'stale' } : p)
-    project.workflow!.events.push({ id: randomUUID(), at: new Date().toISOString(), action: 'subtitle-time-shifted', actor: 'writer', rowIds, detail: `${deltaMs}ms`,
-      changes: rows.filter(r => ids.has(r.id)).map(after => ({ rowId: after.id, before: structuredClone(currentRows.get(after.id)), after: structuredClone(after) })) })
+    const nextRows = new Map(rows.map(row => [row.id, row]))
+    const changes = [...new Set([...currentRows.keys(), ...nextRows.keys()])]
+      .filter(rowId => JSON.stringify(currentRows.get(rowId)) !== JSON.stringify(nextRows.get(rowId)))
+      .map(rowId => ({ rowId, before: structuredClone(currentRows.get(rowId)), after: structuredClone(nextRows.get(rowId)) }))
+    const changedIds = new Set(changes.map(change => change.rowId))
+    project.workflow!.proposals = project.workflow!.proposals.map(p => p.status === 'pending' && changedIds.has(p.rowId) ? { ...p, status: 'stale' } : p)
+    project.workflow!.events.push({ id: randomUUID(), at: new Date().toISOString(), action: 'subtitle-time-shifted', actor: 'writer', rowIds: [...changedIds], detail: `${deltaMs}ms · 미작성 해설 후보 재배치`, changes })
     project.status = 'review'
   })
 }

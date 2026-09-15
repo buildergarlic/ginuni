@@ -1430,7 +1430,7 @@ export function ReviewScreen({ project, processing, notice = '', initialAction, 
       setSubtitlePreview(null)
       setSubtitleOpen(false)
       onProject(updated)
-      notify(`자막 ${updated.rows.filter((row) => row.kind === 'dialogue').length.toLocaleString()}행을 새 초안으로 적용했습니다.`)
+      notify(`대사 ${updated.rows.filter((row) => row.kind === 'dialogue').length.toLocaleString()}행과 해설 후보 ${updated.rows.filter((row) => row.kind === 'descriptionGap').length.toLocaleString()}행을 새 초안으로 적용했습니다.`)
     }, (cause) => setSubtitleImportError(errorMessage(cause)))
   }
   const closeSubtitleDialog = async (): Promise<void> => {

@@ -43,7 +43,8 @@ function validateIncomingRows(rows: ScriptRow[]): void {
       || !['dialogue', 'descriptionGap'].includes(row.kind) || !Number.isSafeInteger(row.startMs) || !Number.isSafeInteger(row.endMs)
       || typeof row.content !== 'string' || !denseStrings(row.speakers)
       || !denseStrings(row.sourceSegmentIds)
-      || (row.sourceCueIds !== undefined && !denseStrings(row.sourceCueIds))) throw new Error('올바르지 않은 행 데이터입니다.')
+      || (row.sourceCueIds !== undefined && !denseStrings(row.sourceCueIds))
+      || (row.subtitleGapCandidate !== undefined && typeof row.subtitleGapCandidate !== 'boolean')) throw new Error('올바르지 않은 행 데이터입니다.')
     ids.add(row.id)
   }
 }
@@ -193,7 +194,7 @@ export async function saveRows(id: string, rows: ScriptRow[], expectedRevision?:
     const next = incoming.map(row => {
       const old = previous.get(row.id)
       const safe: ScriptRow = { id: row.id, kind: row.kind, startMs: row.startMs, endMs: row.endMs, speakers: row.speakers, content: row.content, sourceSegmentIds: row.sourceSegmentIds, ...(row.sourceCueIds ? { sourceCueIds: row.sourceCueIds } : {}), reviewed: false }
-      return old && editable(old) === editable(row) ? { ...safe, reviewed: rowReviewStatus(old) === 'approved', reviewStatus: rowReviewStatus(old), approvedAt: old.approvedAt } : unapprove(safe)
+      return old && editable(old) === editable(row) ? { ...safe, ...(old.subtitleGapCandidate === true ? { subtitleGapCandidate: true } : {}), reviewed: rowReviewStatus(old) === 'approved', reviewStatus: rowReviewStatus(old), approvedAt: old.approvedAt } : unapprove(safe)
     })
     const nextIds = new Set(next.map(r => r.id))
     const changedCount = next.filter(r => !previous.has(r.id) || editable(previous.get(r.id)!) !== editable(r)).length + before.filter(r => !nextIds.has(r.id)).length
@@ -220,7 +221,7 @@ export async function reviewRows(id: string, rowIds: string[], approved: boolean
     if (rowIds.some(id => !project.rows.some(r => r.id === id))) throw new Error('행을 찾을 수 없습니다.')
     if (approved && getReviewIssues(project).some(i => i.severity === 'error' && rowIds.includes(i.rowId ?? ''))) throw new Error('행의 오류를 수정한 뒤 승인하세요.')
     const before = structuredClone(project.rows)
-    project.rows = project.rows.map(row => !rowIds.includes(row.id) ? row : approved ? { ...row, reviewed: true, reviewStatus: 'approved', approvedAt: new Date().toISOString() } : unapprove(row))
+    project.rows = project.rows.map(row => !rowIds.includes(row.id) ? row : approved ? { ...row, subtitleGapCandidate: undefined, reviewed: true, reviewStatus: 'approved', approvedAt: new Date().toISOString() } : unapprove(row))
     audit(project, approved ? 'rows-approved' : 'approval-cleared', before)
   })
 }

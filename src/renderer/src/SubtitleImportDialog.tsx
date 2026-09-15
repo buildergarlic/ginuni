@@ -55,15 +55,17 @@ export function SubtitleImportDialog({ open, preview, busy, error, hasExistingRo
   const errorCount = displayedIssues.filter((issue) => issue.severity === 'error').length
   const warningCount = displayedIssues.length - errorCount
   const visibleRows = state?.rows.slice(0, 50) ?? []
-  const checkpoints = state?.rows.length ? [...new Set([0, Math.floor(state.rows.length / 2), state.rows.length - 1])].map((index) => ({
-    row: state.rows[index],
-    label: index === 0 ? '초반' : index === state.rows.length - 1 ? '후반' : '중간'
+  const dialogueRows = state?.rows.filter((row) => row.kind === 'dialogue') ?? []
+  const candidateCount = state?.rows.filter((row) => row.kind === 'descriptionGap').length ?? 0
+  const checkpoints = dialogueRows.length ? [...new Set([0, Math.floor(dialogueRows.length / 2), dialogueRows.length - 1])].map((index) => ({
+    row: dialogueRows[index],
+    label: index === 0 ? '초반' : index === dialogueRows.length - 1 ? '후반' : '중간'
   })) : []
 
   return (
     <dialog ref={dialogRef} className="subtitle-import-dialog" aria-labelledby="subtitle-import-title" onCancel={(event) => { event.preventDefault(); void onClose() }}>
       <header className="subtitle-dialog-heading">
-        <div><h2 id="subtitle-import-title">자막 파일로 시작</h2><p>로컬 SRT를 확인한 뒤 새 대사 초안으로 적용합니다.</p></div>
+        <div><h2 id="subtitle-import-title">자막 파일로 시작</h2><p>로컬 SRT의 대사와 빈 시간의 해설 후보를 새 초안으로 준비합니다.</p></div>
         <button className="icon-button" aria-label="자막 가져오기 닫기" disabled={busy} onClick={() => void onClose()}>×</button>
       </header>
 
@@ -79,7 +81,7 @@ export function SubtitleImportDialog({ open, preview, busy, error, hasExistingRo
         <>
           <section className="subtitle-summary" aria-label="자막 요약">
             <div><strong>{preview.asset.fileName}</strong><span>{sourceLabels[preview.asset.sourceKind]} · {preview.asset.encoding.toUpperCase()}</span></div>
-            <dl><div><dt>자막</dt><dd>{preview.cues.length.toLocaleString()}개</dd></div><div><dt>처음</dt><dd>{preview.cues.length ? formatTimecode(preview.cues[0].startMs) : '—'}</dd></div><div><dt>마지막</dt><dd>{preview.cues.length ? formatTimecode(preview.cues.at(-1)!.endMs) : '—'}</dd></div><div><dt>확인 항목</dt><dd>{errorCount} 오류 · {warningCount} 주의</dd></div></dl>
+            <dl><div><dt>자막 원문</dt><dd>{preview.cues.length.toLocaleString()}개</dd></div><div><dt>대사</dt><dd>{dialogueRows.length.toLocaleString()}행</dd></div><div><dt>해설 후보</dt><dd>{candidateCount.toLocaleString()}행</dd></div><div><dt>처음</dt><dd>{preview.cues.length ? formatTimecode(preview.cues[0].startMs) : '—'}</dd></div><div><dt>마지막</dt><dd>{preview.cues.length ? formatTimecode(preview.cues.at(-1)!.endMs) : '—'}</dd></div><div><dt>확인 항목</dt><dd>{errorCount} 오류 · {warningCount} 주의</dd></div></dl>
           </section>
 
           <section className="subtitle-offset" aria-labelledby="subtitle-offset-title">
@@ -95,7 +97,7 @@ export function SubtitleImportDialog({ open, preview, busy, error, hasExistingRo
 
           {displayedIssues.length > 0 && <details className="subtitle-issues" open={state.blockingIssues.length > 0 || undefined}><summary>오류와 주의 {displayedIssues.length}개</summary><ul>{displayedIssues.slice(0, 100).map((issue, index) => <li key={`${issue.code}:${issue.ordinal ?? 'all'}:${index}`}><strong>{issue.severity === 'error' ? '오류' : '주의'} · {issueLabel(issue.code)}</strong>{issue.ordinal && <span>{issue.ordinal}번 자막</span>}<p>{issue.message}</p></li>)}</ul>{displayedIssues.length > 100 && <p>나머지 {displayedIssues.length - 100}개 항목은 적용 전 모두 검사됩니다.</p>}</details>}
 
-          <section className="subtitle-preview-list" aria-labelledby="subtitle-preview-list-title"><h3 id="subtitle-preview-list-title">대사 미리보기</h3><p>전체 {state.rows.length.toLocaleString()}행 중 처음 {visibleRows.length.toLocaleString()}행을 표시합니다.</p><ol>{visibleRows.map((row) => <li key={row.id}><time>{formatPreviewTime(row.startMs)}–{formatPreviewTime(row.endMs)}</time><span>{row.content}</span></li>)}</ol></section>
+          <section className="subtitle-preview-list" aria-labelledby="subtitle-preview-list-title"><h3 id="subtitle-preview-list-title">대사와 해설 후보 미리보기</h3><p>대사 {dialogueRows.length.toLocaleString()}행 · 해설 후보 {candidateCount.toLocaleString()}행. 전체 {state.rows.length.toLocaleString()}행 중 처음 {visibleRows.length.toLocaleString()}행을 표시합니다.</p><p>영상의 시작·끝과 자막 사이에서 2초 이상 비는 시간에 해설 후보를 넣습니다. 자막이 없는 시간에도 대사와 소리가 있을 수 있으니, 실제 해설 위치는 영상을 들으며 정하세요.</p><ol>{visibleRows.map((row) => <li key={row.id}><time>{formatPreviewTime(row.startMs)}–{formatPreviewTime(row.endMs)}</time><span><strong>{row.kind === 'dialogue' ? '대사' : '해설 후보'}</strong> · {row.content}</span></li>)}</ol></section>
 
           <footer className="subtitle-dialog-actions">
             <p>{hasExistingRows ? '새 초안을 적용하면 현재 대본은 적용 직전 저장본으로 보관됩니다.' : '적용 후 각 대사를 영상과 대조해 확인하세요.'}</p>

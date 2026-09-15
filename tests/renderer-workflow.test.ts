@@ -53,6 +53,14 @@ describe('writer workspace accessible output', () => {
     expect(document.documentElement?.textContent).toContain('자막 파일로 시작')
     expect(document.documentElement?.textContent).toContain('대사를 직접 입력')
   })
+  it('makes the candidate refill discoverable without claiming the gaps are silent', () => {
+    const document = reviewMarkup([row])
+    const button = Array.from(document.getElementsByTagName('button')).find((entry) => entry.textContent === '빈 시간에 해설 후보 넣기')
+    expect(button).toBeDefined()
+    expect(document.documentElement?.textContent).toContain('기존 대사와 작성한 해설을 보존')
+    expect(document.documentElement?.textContent).toContain('2초 이상 비는 시간')
+    expect(document.documentElement?.textContent).toContain('무음 판정이나 완성된 해설이 아닙니다')
+  })
 })
 
 describe('writer edits', () => {

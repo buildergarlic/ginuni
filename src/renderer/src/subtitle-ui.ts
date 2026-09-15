@@ -1,4 +1,5 @@
 import { generateSubtitleRows, validateSubtitleRows } from '@shared/subtitle-rows'
+import { addDescriptionCandidates } from '@shared/description-candidates'
 import type { ScriptRow } from '@shared/types'
 import type { SubtitleIssue, SubtitlePreview, SubtitleResolution } from '@shared/subtitle-types'
 
@@ -50,9 +51,23 @@ export function buildSubtitlePreviewState(preview: SubtitlePreview, offsetMs: nu
   blockingIssues: SubtitleIssue[]
   overlapGroups: SubtitleOverlapGroup[]
 } {
-  const rows = generateSubtitleRows(preview.cues, offsetMs, resolutions)
-  const effectiveIssues = validateSubtitleRows(rows, preview.durationMs)
+  const dialogueRows = generateSubtitleRows(preview.cues, offsetMs, resolutions)
+  const effectiveIssues = validateSubtitleRows(dialogueRows, preview.durationMs)
   const rawBlockingIssues = preview.issues.filter((issue) => issue.severity === 'error' && issue.code !== 'overlap')
   const blockingIssues = [...rawBlockingIssues, ...effectiveIssues.filter((issue) => issue.severity === 'error')]
-  return { rows, effectiveIssues, blockingIssues, overlapGroups: collectOverlapGroups(rows) }
+  const overlapGroups = collectOverlapGroups(dialogueRows)
+  let rows = dialogueRows
+  if (dialogueRows.length > 0 && blockingIssues.length === 0 && overlapGroups.length === 0) {
+    try {
+      rows = addDescriptionCandidates(dialogueRows, preview.durationMs)
+    } catch (cause) {
+      const issue: SubtitleIssue = {
+        code: 'range', severity: 'error',
+        message: cause instanceof Error ? cause.message : '해설 후보를 준비할 수 없습니다. 자막의 시간과 개수를 확인하세요.'
+      }
+      effectiveIssues.push(issue)
+      blockingIssues.push(issue)
+    }
+  }
+  return { rows, effectiveIssues, blockingIssues, overlapGroups }
 }

@@ -8,7 +8,7 @@ import { supportsSpeakerLabels } from '@shared/speaker-labels'
 import type { AppApi, CreateProjectInput, ExternalLinkTarget, LocalDiarizationConfig, LocalModelStatus, ModelDownloadProgress, ProcessingProgress, ProcessingRun, ProcessingWarning, ScriptProject, ScriptRow, TranscriptionEngine } from '@shared/types'
 import { buildHwpx, nextVersionedHwpxPath } from './services/hwpx'
 import { prepareMedia } from './services/media'
-import { prepareProjectMedia, previewSubtitleFile, applySubtitleImport, discardSubtitlePreview, shiftSubtitleRows } from './services/subtitle-ingestion'
+import { prepareProjectMedia, previewSubtitleFile, applySubtitleImport, discardSubtitlePreview, shiftSubtitleRows, addProjectDescriptionCandidates } from './services/subtitle-ingestion'
 import type { SubtitlePreviewOptions, SubtitleResolution } from '@shared/subtitle-types'
 import { createMediaProtocolHandler } from './services/media-protocol'
 import { LocalWhisperTranscriptionProvider } from './services/local-transcription'
@@ -406,6 +406,7 @@ function registerIpc(): void {
   ipcMain.handle('project:apply-subtitle', (_event, id: string, previewId: string, offsetMs: number, resolutions: SubtitleResolution[], revision: number) => withProjectJob(id, signal => applySubtitleImport(id, previewId, offsetMs, resolutions, revision, signal)))
   ipcMain.handle('project:discard-subtitle-preview', (_event, id: string, previewId: string) => discardSubtitlePreview(id, previewId))
   ipcMain.handle('project:shift-subtitle-rows', (_event, id: string, rowIds: string[], deltaMs: number, revision: number) => withProjectJob(id, () => shiftSubtitleRows(id, rowIds, deltaMs, revision)))
+  ipcMain.handle('project:add-description-candidates', (_event, id: string, revision: number) => withProjectJob(id, () => addProjectDescriptionCandidates(id, revision)))
   ipcMain.handle('project:save-rows', (_event, id: string, rows: ScriptRow[], revision?: number) => { assertProjectIdle(id); return saveRows(id, rows, revision) })
   ipcMain.handle('project:set-engine', (_event, id: string, engine: TranscriptionEngine) => { assertProjectIdle(id); return setTranscriptionEngine(id, engine) })
   ipcMain.handle('project:set-local-diarization', (_event, id: string, config: LocalDiarizationConfig) => { assertProjectIdle(id); return setLocalDiarizationConfig(id, config) })

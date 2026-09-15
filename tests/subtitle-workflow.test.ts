@@ -6,7 +6,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({ directory: '' }))
 vi.mock('electron', () => ({ app: { getPath: () => state.directory } }))
 import * as store from '@main/services/project-store'
-import { previewSubtitleFile, applySubtitleImport, shiftSubtitleRows, discardSubtitlePreview } from '@main/services/subtitle-ingestion'
+import { previewSubtitleFile, applySubtitleImport, shiftSubtitleRows, discardSubtitlePreview, addProjectDescriptionCandidates } from '@main/services/subtitle-ingestion'
 import { getReviewIssues } from '@shared/workflow'
 import { resolveExportProvenance, getExportGate } from '@main/services/export-workflow'
 import { buildSrtContent } from '@main/services/srt'
@@ -31,7 +31,8 @@ it('imports exact cues, preserves raw bytes and authored snapshot, saves referen
   const { project, subtitlePath } = await fixture()
   const preview = await previewSubtitleFile(project.id, subtitlePath, project.workflow!.revision)
   const imported = await applySubtitleImport(project.id, preview.previewId, 0, [], project.workflow!.revision)
-  expect(imported.rows.map(r => [r.startMs, r.endMs])).toEqual([[1250, 2875], [3050, 3600]])
+  expect(imported.rows.map(r => [r.startMs, r.endMs])).toEqual([[1250, 2875], [3050, 3600], [3600, 10000]])
+  expect(imported.rows[2]).toMatchObject({ kind: 'descriptionGap', subtitleGapCandidate: true, reviewed: false, sourceCueIds: [] })
   expect(imported.runs).toEqual([])
   expect(imported.rows[0].sourceCueIds).toEqual([preview.cues[0].id])
   expect(getReviewIssues(imported).some(i => ['ROW_SOURCE', 'ROW_SOURCE_MISSING', 'ROW_SPEAKER'].includes(i.code))).toBe(false)
@@ -47,6 +48,56 @@ it('imports exact cues, preserves raw bytes and authored snapshot, saves referen
   const restored = await store.restoreSnapshot(saved.id, snapshot.id, saved.workflow!.revision)
   expect(restored.rows[0].content).toBe('작가가 쓴 해설')
   expect(restored.subtitleWorkspace!.assets).toHaveLength(1)
+})
+
+it('fills an existing draft without changing authored rows, is idempotent and snapshots the original', async () => {
+  const { project } = await fixture()
+  const filled = await addProjectDescriptionCandidates(project.id, project.workflow!.revision)
+  expect(filled.rows[0]).toEqual(project.rows[0])
+  expect(filled.rows[1]).toMatchObject({ kind: 'descriptionGap', startMs: 1000, endMs: 10000, subtitleGapCandidate: true })
+  const again = await addProjectDescriptionCandidates(project.id, filled.workflow!.revision)
+  expect(again.rows).toEqual(filled.rows)
+  const snapshots = (await store.listSnapshots(project.id)).filter(s => s.reason === '해설 후보 추가 전')
+  expect(snapshots).toHaveLength(1)
+  const restored = await store.restoreSnapshot(project.id, snapshots[0].id, again.workflow!.revision)
+  expect(restored.rows).toEqual(project.rows)
+})
+
+it('keeps automatic markers server controlled and protects an edited candidate during a subtitle shift', async () => {
+  const { project, subtitlePath } = await fixture()
+  const preview = await previewSubtitleFile(project.id, subtitlePath, project.workflow!.revision)
+  let draft = await applySubtitleImport(project.id, preview.previewId, 0, [], project.workflow!.revision)
+  const unchanged = await store.saveRows(draft.id, draft.rows, draft.workflow!.revision)
+  expect(unchanged.rows[2].subtitleGapCandidate).toBe(true)
+  draft = await store.saveRows(draft.id, unchanged.rows.map((row, i) => i === 2 ? { ...row, content: '작가가 새로 쓴 해설' } : { ...row, subtitleGapCandidate: true }), unchanged.workflow!.revision)
+  expect(draft.rows.every(row => row.subtitleGapCandidate !== true)).toBe(true)
+  await expect(shiftSubtitleRows(draft.id, [draft.rows[1].id], 100, draft.workflow!.revision)).rejects.toThrow(/겹/)
+  expect((await store.loadProject(draft.id)).rows).toEqual(draft.rows)
+})
+
+it('rebuilds untouched candidates around shifted dialogue and restores the entire prior timeline', async () => {
+  const { project, subtitlePath } = await fixture()
+  const preview = await previewSubtitleFile(project.id, subtitlePath, project.workflow!.revision)
+  const draft = await applySubtitleImport(project.id, preview.previewId, 0, [], project.workflow!.revision)
+  const shifted = await shiftSubtitleRows(draft.id, draft.rows.filter(r => r.kind === 'dialogue').map(r => r.id), 100, draft.workflow!.revision)
+  expect(shifted.rows.map(r => [r.startMs, r.endMs])).toEqual([[1350, 2975], [3150, 3700], [3700, 10000]])
+  expect(shifted.rows[2].subtitleGapCandidate).toBe(true)
+  expect(shifted.workflow!.events.at(-1)!.changes!.some(c => c.before?.subtitleGapCandidate)).toBe(true)
+  const snapshot = (await store.listSnapshots(draft.id)).find(s => s.reason === '자막 시간 이동 전')!
+  const restored = await store.restoreSnapshot(draft.id, snapshot.id, shifted.workflow!.revision)
+  expect(restored.rows).toEqual(draft.rows)
+})
+
+it('keeps a confirmed candidate fixed even if the writer later clears its approval', async () => {
+  const { project, subtitlePath } = await fixture()
+  const preview = await previewSubtitleFile(project.id, subtitlePath, project.workflow!.revision)
+  let draft = await applySubtitleImport(project.id, preview.previewId, 0, [], project.workflow!.revision)
+  const candidateId = draft.rows[2].id
+  draft = await store.reviewRows(draft.id, [candidateId], true, draft.workflow!.revision)
+  expect(draft.rows[2].subtitleGapCandidate).toBeUndefined()
+  draft = await store.reviewRows(draft.id, [candidateId], false, draft.workflow!.revision)
+  await expect(shiftSubtitleRows(draft.id, [draft.rows[1].id], 100, draft.workflow!.revision)).rejects.toThrow(/겹/)
+  expect((await store.loadProject(draft.id)).rows).toEqual(draft.rows)
 })
 
 it('blocks missing rights, stale revisions, changed subtitles and changed source media without replacing existing work', async () => {

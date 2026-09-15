@@ -103,6 +103,7 @@ export interface ScriptRow {
   content: string
   sourceSegmentIds: string[]
   sourceCueIds?: string[]
+  subtitleGapCandidate?: boolean
   reviewed: boolean
   reviewStatus?: 'unreviewed' | 'needsAttention' | 'approved'
   approvedAt?: string
@@ -381,6 +382,7 @@ export interface AppApi {
   applySubtitleImport(id: string, previewId: string, offsetMs: number, resolutions: SubtitleResolution[], expectedRevision: number): Promise<ScriptProject>
   discardSubtitlePreview(id: string, previewId: string): Promise<void>
   shiftSubtitleRows(id: string, rowIds: string[], deltaMs: number, expectedRevision: number): Promise<ScriptProject>
+  addDescriptionCandidates(id: string, expectedRevision: number): Promise<ScriptProject>
   saveRows(id: string, rows: ScriptRow[], expectedRevision?: number): Promise<ScriptProject>
   setProjectConsent(id: string, consent: { rightsConfirmed: boolean; cloudAudioConsent: boolean; cloudCorrectionConsent: boolean }): Promise<ScriptProject>
   reviewRows(id: string, rowIds: string[], approved: boolean, expectedRevision: number): Promise<ScriptProject>
