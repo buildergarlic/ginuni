@@ -1,5 +1,11 @@
 GiNuNi local speaker diarization notices
 
+This file contains the speaker diarization attributions. The complete
+component inventory is in THIRD_PARTY_NOTICES.md, distributed alongside
+this file in the installed application's resources/licenses directory.
+GiNuNi's own LICENSE and NOTICE are also included there. Each third-party
+component retains its original license.
+
 1. sherpa-onnx v1.13.6
 Copyright The Next-gen Kaldi team and contributors.
 Licensed under the Apache License, Version 2.0.

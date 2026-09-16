@@ -798,6 +798,8 @@ function AboutScreen({ bootstrap, updateStatus, onBack, onSupport, onCheckUpdate
             <h2>개발 작업 저장 위치</h2>
             <code>https://github.com/buildergarlic/ginuni</code>
             <p>소스와 버전, 변경 기록, Windows 설치본을 관리합니다.</p>
+            <p>자체 소스 코드: Apache License 2.0 · Copyright 2026 BuilderGarlic.</p>
+            <p>라이선스 전문과 제3자 고지는 설치 폴더의 <code>resources/licenses</code>에 있습니다. 포함된 구성 요소에는 각각의 원래 라이선스가 적용됩니다.</p>
           </section>
           <section>
             <h2>개발자</h2>
