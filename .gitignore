@@ -1,6 +1,7 @@
 node_modules/
 .worktrees/
 out/
+dist-web/
 release/
 coverage/
 .env

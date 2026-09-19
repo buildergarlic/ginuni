@@ -1,0 +1,56 @@
+name: Web app deployment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/web/**'
+      - 'src/shared/**'
+      - 'src/renderer/src/assets/branding/**'
+      - 'resources/templates/**'
+      - 'package*.json'
+      - 'vite.web.config.ts'
+      - 'tests/**'
+      - '.github/workflows/web.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Verify web workflows and shared document formats
+        run: npx vitest run tests/web-project.test.ts tests/web-export.test.ts tests/web-transcription.test.ts tests/hwpx.test.ts tests/srt.test.ts tests/subtitle-parser-review.test.ts tests/description-candidates.test.ts
+      - run: npm run build:web
+        env:
+          GINUNI_WEB_BASE: /ginuni/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist-web
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish web app
+        id: deployment
+        uses: actions/deploy-pages@v4

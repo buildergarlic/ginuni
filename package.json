@@ -18,7 +18,10 @@
     "qa:hwpx": "tsx scripts/create-qa-hwpx.ts",
     "evaluate:workflow": "tsx scripts/evaluate-workflow.ts",
     "dist:win": "npm run sync:assets && npm run build && electron-builder --win nsis",
-    "verify": "npm run typecheck && npm run test && npm run build"
+    "verify": "npm run typecheck && npm run test && npm run build && npm run build:web",
+    "dev:web": "vite --config vite.web.config.ts",
+    "build:web": "vite build --config vite.web.config.ts",
+    "preview:web": "vite preview --config vite.web.config.ts"
   },
   "dependencies": {
     "@fluentui/react-icons": "2.0.339",
@@ -33,6 +36,7 @@
     "zod": "^4.1.5"
   },
   "devDependencies": {
+    "@huggingface/transformers": "3.8.1",
     "@types/node": "^26.2.0",
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
@@ -43,6 +47,7 @@
     "electron": "^43.4.0",
     "electron-builder": "^26.0.12",
     "electron-vite": "^5.0.0",
+    "fflate": "0.8.3",
     "tsx": "^4.20.5",
     "typescript": "^7.0.2",
     "vite": "^7.1.4",
@@ -129,6 +134,11 @@
       "createStartMenuShortcut": true,
       "shortcutName": "화면해설 대본 도구",
       "deleteAppDataOnUninstall": false
+    }
+  },
+  "overrides": {
+    "@huggingface/transformers": {
+      "sharp": "0.35.4"
     }
   }
 }
