@@ -19,7 +19,8 @@ import { createHwpxBlob, downloadBlob, safeFileName } from './export'
 import Workspace from './Workspace'
 import logo from '../renderer/src/assets/branding/ginuni-logo.png'
 import icon from '../renderer/src/assets/branding/ginuni-icon.png'
-import { SAMPLE_MEDIA, SAMPLE_DESCRIPTION_ROWS } from './sample-media'
+import { SAMPLE_MEDIA } from './sample-media'
+import sampleTranscript from './sample-transcript.json'
 
 const messageOf = (error: unknown) =>
   error instanceof Error
@@ -46,6 +47,7 @@ export default function App() {
   const mediaSelection = useRef({ id: 0, pending: false })
   const cancellation = useRef<AbortController | null>(null)
   const backupInput = useRef<HTMLInputElement>(null)
+  const publicSample = project?.sample === true && project.sampleId === SAMPLE_MEDIA.id
 
   useEffect(() => {
     try {
@@ -190,7 +192,8 @@ export default function App() {
         mediaName: selected.name,
         durationMs: duration,
         sample: false,
-        sampleId: undefined
+        sampleId: undefined,
+        transcriptionLanguage: project.sample ? 'korean' : project.transcriptionLanguage ?? 'korean'
       })
       setNotice('파일을 연결했습니다. 영상·음성은 이 기기에서만 처리됩니다.')
     } catch (e) {
@@ -245,7 +248,7 @@ export default function App() {
   }
   async function analyze() {
     if (
-      !file || !project || busy || cancellation.current ||
+      !project || (!file && !publicSample) || busy || cancellation.current ||
       mediaSelection.current.pending
     )
       return
@@ -264,9 +267,16 @@ export default function App() {
     setNotice('')
     setProgress({ percent: 0, message: '음성 분석을 준비합니다.' })
     try {
+      let analysisFile = file
+      if (!analysisFile) {
+        const response = await fetch(SAMPLE_MEDIA.url, { signal: controller.signal })
+        if (!response.ok) throw new Error('샘플 영상을 가져오지 못했습니다. 다시 시도해 주세요.')
+        analysisFile = new File([await response.blob()], 'shy-guy-1947.mp4', { type: 'video/mp4' })
+      }
       const { transcribeFile } = await import('./transcription')
-      const result = await transcribeFile(file, {
+      const result = await transcribeFile(analysisFile, {
         signal: controller.signal,
+        language: publicSample ? 'english' : project.transcriptionLanguage ?? 'korean',
         onProgress: setProgress
       })
       if (controller.signal.aborted) return
@@ -551,26 +561,25 @@ export default function App() {
                 >
                   <img
                     src={SAMPLE_MEDIA.poster}
-                    alt="1906년 샌프란시스코 마켓 스트리트의 실제 기록영상 한 장면"
+                    alt="영화 Shy Guy에서 아버지와 아들이 작업대 옆에서 대화하는 실제 장면"
                   />
                   <span>▶ 실제 영상으로 체험하기</span>
                 </button>
                 <div className="preview-line">
-                  <span>1906</span>
-                  <b>기록영상</b>
-                  <p>샌프란시스코의 마켓 스트리트</p>
+                  <span>1947</span>
+                  <b>영어 대화</b>
+                  <p>Shy Guy · 아버지와 아들의 대화</p>
                 </div>
                 <div className="preview-line description">
-                  <span>00:00</span>
-                  <b>해설</b>
+                  <span>AI</span>
+                  <b>대사</b>
                   <p>
-                    {SAMPLE_DESCRIPTION_ROWS[0].content}
+                    {sampleTranscript.segments[0]?.text || '원음을 분석해 대사와 시간을 확인하세요.'}
                     <i />
                   </p>
                 </div>
                 <div className="preview-bottom">
-                  <span className="dot" /> 퍼블릭도메인 · 원본 기록영상 60초
-                  발췌
+                  <span className="dot" /> 실제 대화 60초 · AI 대사·타임스탬프 대조
                 </div>
               </div>
             </section>

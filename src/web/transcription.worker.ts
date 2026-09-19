@@ -9,6 +9,8 @@ import {
   TRANSCRIPTION_MAX_CHUNK_MS,
   TRANSCRIPTION_MODEL,
   TRANSCRIPTION_MODEL_REVISION,
+  TRANSCRIPTION_ENGLISH_MODEL,
+  TRANSCRIPTION_ENGLISH_MODEL_REVISION,
   TRANSCRIPTION_SAMPLE_RATE,
   validateMediaDuration,
   type TranscriptionWorkerRequest,
@@ -29,6 +31,7 @@ const scope = globalThis as unknown as {
 }
 
 let transcriber: AutomaticSpeechRecognitionPipeline | undefined
+let transcriberLanguage: 'korean' | 'english' | undefined
 
 /** Keep quiet speech and ordinary pauses; remove only sustained near-digital silence. */
 function findSoundWindows(audio: Float32Array): { start: number; end: number }[] {
@@ -59,6 +62,7 @@ function findSoundWindows(audio: Float32Array): { start: number; end: number }[]
 async function disposeTranscriber(): Promise<void> {
   const loaded = transcriber
   transcriber = undefined
+  transcriberLanguage = undefined
   await loaded?.dispose()
 }
 
@@ -95,6 +99,7 @@ async function handleRequest(data: TranscriptionWorkerRequest): Promise<void> {
       throw new Error('분석할 오디오 구간이 너무 깁니다. 파일을 다시 선택해 주세요.')
     }
 
+    const language = data.language ?? 'korean'
     const windows = findSoundWindows(data.audio)
     // Never pass long digital-silence stretches to Whisper, including within a voiced chunk.
     if (!windows.length) {
@@ -103,16 +108,17 @@ async function handleRequest(data: TranscriptionWorkerRequest): Promise<void> {
       return
     }
 
+    if (transcriber && transcriberLanguage !== language) await disposeTranscriber()
     if (!transcriber) {
       stage = 'loading'
       const files = new Map<string, number>()
       transcriber = await pipeline<'automatic-speech-recognition'>(
         'automatic-speech-recognition',
-        TRANSCRIPTION_MODEL,
+        language === 'english' ? TRANSCRIPTION_ENGLISH_MODEL : TRANSCRIPTION_MODEL,
         {
           device: 'wasm',
           dtype: 'q8',
-          revision: TRANSCRIPTION_MODEL_REVISION,
+          revision: language === 'english' ? TRANSCRIPTION_ENGLISH_MODEL_REVISION : TRANSCRIPTION_MODEL_REVISION,
           progress_callback: (info) => {
             if ('file' in info) {
               if (info.status === 'progress') files.set(info.file, info.progress)
@@ -130,42 +136,90 @@ async function handleRequest(data: TranscriptionWorkerRequest): Promise<void> {
           }
         }
       )
+      transcriberLanguage = language
     }
 
     stage = 'transcribing'
-    const inferenceCounts = windows.map(window => Math.max(1,
-      Math.ceil(((window.end - window.start) / TRANSCRIPTION_SAMPLE_RATE - 30) / 20) + 1))
-    const totalInferences = inferenceCounts.reduce((sum, count) => sum + count, 0)
+    const countInferences = (sampleCount: number): number => Math.max(1,
+      Math.ceil((sampleCount / TRANSCRIPTION_SAMPLE_RATE - 30) / 20) + 1)
+    const inferenceCounts = windows.map(window => countInferences(window.end - window.start))
+    // Reserve progress for a possible prefix recovery so completion never precedes that pass.
+    const inferenceBudgets = windows.map((window, index) => inferenceCounts[index] * (
+      language === 'english' && window.end - window.start >= 8 * TRANSCRIPTION_SAMPLE_RATE ? 2 : 1
+    ))
+    const totalInferences = inferenceBudgets.reduce((sum, count) => sum + count, 0)
     let completedInferences = 0
     const segments: ReturnType<typeof normalizeTranscript> = []
-    report(42, '기기에서 한국어 음성을 분석하고 있습니다.')
+    const activeTranscriber = transcriber
+    report(42, `기기에서 ${language === 'english' ? '영어' : '한국어'} 음성을 분석하고 있습니다.`)
     for (const [pieceIndex, window] of windows.entries()) {
       const inferenceCount = inferenceCounts[pieceIndex]
-      let streamedInferences = 0
       const progressMessage = `기기에서 음성을 분석하고 있습니다. 음성 조각 ${pieceIndex + 1}/${windows.length}`
-      class ChunkProgressStreamer extends TextStreamer {
-        override end(): void {
-          super.end()
-          streamedInferences = Math.min(inferenceCount, streamedInferences + 1)
-          report(42 + (completedInferences + streamedInferences) / totalInferences * 55, progressMessage)
+      const infer = async (audio: Float32Array, passOffset: number, message: string) => {
+        const passInferences = countInferences(audio.length)
+        let streamedInferences = 0
+        class ChunkProgressStreamer extends TextStreamer {
+          override end(): void {
+            super.end()
+            streamedInferences = Math.min(passInferences, streamedInferences + 1)
+            report(42 + (completedInferences + passOffset + streamedInferences) / totalInferences * 55, message)
+          }
         }
+        return activeTranscriber(audio, {
+          ...(language === 'english' ? {} : { language, task: 'transcribe' as const }),
+          return_timestamps: true,
+          chunk_length_s: 30,
+          stride_length_s: 5,
+          streamer: new ChunkProgressStreamer(activeTranscriber.tokenizer, {
+            skip_prompt: true,
+            callback_function: () => undefined
+          })
+        })
       }
       // A view, not a copy: PCM memory remains bounded by the original <=64-second window.
       const audio = data.audio.subarray(window.start, window.end)
-      const output = await transcriber(audio, {
-        language: 'korean',
-        task: 'transcribe',
-        return_timestamps: true,
-        chunk_length_s: 30,
-        stride_length_s: 5,
-        streamer: new ChunkProgressStreamer(transcriber.tokenizer, {
-          skip_prompt: true,
-          callback_function: () => undefined
-        })
-      })
+      const output = await infer(audio, 0, progressMessage)
       const pieceDurationMs = audio.length / TRANSCRIPTION_SAMPLE_RATE * 1000
       const offsetMs = window.start / TRANSCRIPTION_SAMPLE_RATE * 1000
-      for (const segment of normalizeTranscript(Array.isArray(output) ? output[0] : output, pieceDurationMs)) {
+      const original = normalizeTranscript(Array.isArray(output) ? output[0] : output, pieceDurationMs)
+      let pieceSegments = original
+      const missingPrefixMs = original[0]?.startMs ?? pieceDurationMs
+      if (language === 'english' && missingPrefixMs >= 8000) {
+        // A noisy opening can make Whisper emit an empty first inference. Retry once
+        // with shifted context, preserving all existing text and its measured times.
+        const retryOffsetMs = 2000
+        const retryStart = 2 * TRANSCRIPTION_SAMPLE_RATE
+        // End at the missing prefix: including the already recognized next utterance
+        // can make a noisy prefix decode as <|nocaptions|> again.
+        const retryEnd = Math.min(audio.length, Math.ceil(missingPrefixMs / 1000 * TRANSCRIPTION_SAMPLE_RATE))
+        const retryAudio = audio.subarray(retryStart, retryEnd)
+        const retryDurationMs = retryAudio.length / TRANSCRIPTION_SAMPLE_RATE * 1000
+        const recoveryMessage = `기기에서 누락 가능성이 있는 앞부분을 다시 분석하고 있습니다. 음성 조각 ${pieceIndex + 1}/${windows.length}`
+        report(42 + (completedInferences + inferenceCount) / totalInferences * 55, recoveryMessage)
+        const retryOutput = await infer(retryAudio, inferenceCount, recoveryMessage)
+        const retryResult = Array.isArray(retryOutput) ? retryOutput[0] : retryOutput
+        // Reject predicted ends beyond the retry input before normalization can clamp
+        // them to the boundary. Existing utterances must never be pulled into recovery.
+        const boundedRetry = retryResult.chunks?.length ? {
+          ...retryResult,
+          text: '',
+          chunks: retryResult.chunks.filter(chunk => {
+            const end = chunk.timestamp?.[1]
+            return end === null || (typeof end === 'number' && Number.isFinite(end) && end * 1000 <= retryDurationMs)
+          })
+        } : retryResult
+        const recovered = normalizeTranscript(boundedRetry, retryDurationMs)
+          .map(segment => ({
+            ...segment,
+            id: `recovery-${segment.id}`,
+            startMs: segment.startMs + retryOffsetMs,
+            endMs: segment.endMs + retryOffsetMs
+          }))
+          // Do not clip an overlapping utterance or replace any primary inference.
+          .filter(segment => segment.endMs <= missingPrefixMs)
+        pieceSegments = [...recovered, ...original]
+      }
+      for (const segment of pieceSegments) {
         segments.push({
           ...segment,
           id: windows.length === 1 ? segment.id : `piece-${pieceIndex + 1}-${segment.id}`,
@@ -173,7 +227,7 @@ async function handleRequest(data: TranscriptionWorkerRequest): Promise<void> {
           endMs: Math.min(data.durationMs, Math.round(offsetMs + segment.endMs))
         })
       }
-      completedInferences += inferenceCount
+      completedInferences += inferenceBudgets[pieceIndex]
       report(42 + completedInferences / totalInferences * 55, progressMessage)
     }
     report(100, '이 구간의 음성 분석을 완료했습니다.')

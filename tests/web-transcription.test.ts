@@ -97,6 +97,7 @@ describe('sequential browser transcription lifecycle', () => {
       const request = workers[0].postMessage.mock.calls[chunkId][0]
       if (request.type !== 'transcribe') throw new Error('Unexpected message')
       expect(request.audio.length).toBeLessThanOrEqual(64_000 * 16)
+      expect(request.language).toBe('korean')
       workers[0].emit({ type: 'chunk', chunkId, segments: chunkId === 2 ? [] : line(`문장 ${chunkId}`) })
     }
     const result = await pending
@@ -110,6 +111,19 @@ describe('sequential browser transcription lifecycle', () => {
     const percentages = progress.mock.calls.map(([value]) => value.percent)
     expect(percentages).toEqual([...percentages].sort((a, b) => a - b))
     expect(percentages.at(-1)).toBe(100)
+  })
+
+  it('forwards the selected English language to every window and preserves the returned English text', async () => {
+    vi.mocked(openMediaChunks).mockResolvedValue({ durationMs: 70_000, ranges: planMediaChunks(70_000), dispose: disposeMedia, readChunk })
+    const pending = transcribeFile(file(), { language: 'english' })
+    for (let chunkId = 0; chunkId < 2; chunkId++) {
+      await vi.waitFor(() => expect(workers[0]?.postMessage.mock.calls[chunkId]?.[0]).toMatchObject({ type: 'transcribe', chunkId, language: 'english' }))
+      workers[0].emit({ type: 'chunk', chunkId, segments: line(chunkId ? 'Preserve the original speech.' : 'Hello, everyone.') })
+    }
+    const result = await pending
+    expect(result.segments.map(segment => segment.text)).toEqual(['Hello, everyone.', 'Preserve the original speech.'])
+    expect(result.segments.map(segment => segment.startMs)).toEqual([3000, 61_000])
+    expect(workers).toHaveLength(1)
   })
 
   it('ignores wrong and stale chunk replies and cancels the entire job without returning partial text', async () => {

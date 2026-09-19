@@ -11,6 +11,10 @@ export const TRANSCRIPTION_MODEL = 'Xenova/whisper-tiny'
 // Pin the public model so a Hub update cannot silently change submitted results.
 export const TRANSCRIPTION_MODEL_REVISION =
   '5332fcc35e32a33b86612b9a57a89be7906102b1'
+export const TRANSCRIPTION_ENGLISH_MODEL = 'Xenova/whisper-base.en'
+export const TRANSCRIPTION_ENGLISH_MODEL_REVISION = '95bf40a508535962c6483ead40270b2e32267508'
+
+export type TranscriptionLanguage = 'korean' | 'english'
 
 export interface TranscriptionProgress {
   percent: number
@@ -23,7 +27,7 @@ export interface BrowserTranscriptionResult {
 }
 
 export type TranscriptionWorkerRequest =
-  | { type: 'transcribe'; chunkId: number; audio: Float32Array; durationMs: number }
+  | { type: 'transcribe'; chunkId: number; audio: Float32Array; durationMs: number; language?: TranscriptionLanguage }
   | { type: 'dispose' }
 
 export type TranscriptionWorkerResponse =

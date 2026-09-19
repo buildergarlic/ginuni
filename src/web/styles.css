@@ -54,6 +54,20 @@
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+.sample-credit .primary { display: block; width: 100%; margin: 12px 0; }
+.sample-comparison { border: 1px solid var(--line); border-radius: 9px; padding: 14px 16px; margin: 18px 0; background: #fff; font-size: 12px; }
+.sample-comparison summary { cursor: pointer; color: var(--green); font-weight: 700; }
+.sample-comparison > p { color: var(--muted); line-height: 1.7; }
+.sample-comparison ol { padding: 0; list-style: none; max-height: 370px; overflow-y: auto; }
+.sample-comparison li { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.sample-comparison li p { margin: 7px 0; font-size: 13px; line-height: 1.6; color: var(--ink); }
+.sample-comparison li small { color: var(--muted); line-height: 1.6; }
+.reference-play { padding: 5px 7px; background: var(--pale); color: var(--green); border: 0; border-radius: 4px; font-variant-numeric: tabular-nums; font-size: 11px; text-align: left; }
+.comparison-summary { display: grid; gap: 5px; padding: 12px; background: #f4f7ed; line-height: 1.6; }
+.comparison-summary span { color: var(--muted); font-size: 11px; }
+.row-play { margin-bottom: 12px; }
+.ai-option label { display: grid; gap: 5px; margin: 10px 0; font-size: 11px; }
+.ai-option select { padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: white; color: var(--ink); }
 
 :root {
   font-family: 'Noto Sans KR', 'Malgun Gothic', sans-serif;
@@ -63,6 +77,7 @@
   font-size: 14px;
   line-height: 1.6;
   --green: #145f59;
+  --ink: #243f38;
   --muted: #6a7b72;
   --line: #dce5dd;
   --pale: #edf3eb;

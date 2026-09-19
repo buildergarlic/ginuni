@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ScriptRow } from '../src/shared/types'
+import { SAMPLE_MEDIA } from '../src/web/sample-media'
+import sampleTranscript from '../src/web/sample-transcript.json'
 import {
   createProject,
   createSampleProject,
@@ -45,16 +47,32 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('web project backups', () => {
-  it('creates a real public-domain film sample with honest editable descriptions and no invented dialogue', () => {
+  it('creates an empty manual draft that round trips independently from the sample', () => {
     const draft = createProject()
     expect(draft.id).not.toBe(createProject().id)
     expect(parseProject(serializeProject(draft))).toMatchObject({ source: 'manual', durationMs: 60_000, rows: [] })
+  })
+
+  it('preserves the real English sample capture as unreviewed dialogue without invented descriptions', () => {
+    const capturedSegments: Array<{ id: string; startMs: number; endMs: number; text: string }> = sampleTranscript.segments
+    expect(capturedSegments.length).toBeGreaterThan(0)
+    expect(sampleTranscript.sampleId).toBe(SAMPLE_MEDIA.id)
+    expect(sampleTranscript.language).toBe('english')
     const sample = parseProject(serializeProject(createSampleProject()))
-    expect(sample).toMatchObject({ source: 'sample', sample: true, sampleId: 'market-street-1906', durationMs: 60_000 })
-    expect(sample.rows.length).toBeGreaterThan(2)
-    expect(sample.rows.every(item => item.kind === 'descriptionGap' && !item.reviewed && item.content.trim())).toBe(true)
-    expect(sample.rows.every(item => item.sourceSegmentIds.length === 0 && item.speakers.length === 0)).toBe(true)
-    expect(sample.rows.at(-1)?.endMs).toBe(60_000)
+    expect(sample).toMatchObject({
+      title: SAMPLE_MEDIA.title,
+      source: 'sample',
+      sample: true,
+      sampleId: SAMPLE_MEDIA.id,
+      durationMs: SAMPLE_MEDIA.durationMs,
+      transcriptionLanguage: 'english'
+    })
+    expect(sample.rows.map(({ content, startMs, endMs, sourceSegmentIds }) => ({ content, startMs, endMs, sourceSegmentIds }))).toEqual(
+      capturedSegments.map(({ id, text, startMs, endMs }) => ({ content: text, startMs, endMs, sourceSegmentIds: [id] }))
+    )
+    expect(sample.rows).toHaveLength(capturedSegments.length)
+    expect(sample.rows.every(item => item.kind === 'dialogue' && !item.reviewed && item.reviewStatus === 'unreviewed')).toBe(true)
+    expect(sample.rows.every(item => item.speakers.length === 0 && /[A-Za-z]/.test(item.content) && !/[가-힣]/.test(item.content))).toBe(true)
   })
 
   it('preserves legacy sample drafts without assigning unrelated real footage', () => {
@@ -63,6 +81,23 @@ describe('web project backups', () => {
     expect(restored.rows).toEqual(oldSample.rows)
     expect(restored.durationMs).toBe(45_000)
     expect(restored.sampleId).toBeUndefined()
+  })
+
+  it('preserves the old Market Street sample backup without rewriting its footage, title or descriptions', () => {
+    const oldSample = project({
+      source: 'sample',
+      sample: true,
+      sampleId: 'market-street-1906',
+      title: 'Market Street (1906) · 내가 고친 대본',
+      mediaName: 'sample-market-street-1906.mp4',
+      durationMs: 60_000,
+      rows: [row({ kind: 'descriptionGap', startMs: 0, endMs: 8000, content: '노면전차 앞으로 사람들이 지나간다.' })]
+    })
+    const restored = parseProject(serializeProject(oldSample))
+    expect(restored).toEqual(oldSample)
+    expect(restored.sampleId).not.toBe(SAMPLE_MEDIA.id)
+    expect(restored.title).not.toBe(SAMPLE_MEDIA.title)
+    expect(restored.transcriptionLanguage).toBeUndefined()
   })
 
   it('round trips Korean text and approved rows while stripping unknown project and row properties', () => {

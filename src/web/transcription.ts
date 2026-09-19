@@ -1,14 +1,15 @@
 import type { TranscriptSegment } from '../shared/types'
 import {
-  type BrowserTranscriptionResult, type TranscriptionProgress,
+  type BrowserTranscriptionResult, type TranscriptionProgress, type TranscriptionLanguage,
   type TranscriptionWorkerRequest, type TranscriptionWorkerResponse
 } from './transcription-types'
 import { abortError, checkAborted, openMediaChunks, appendChunkTranscript } from './media-chunks'
 
 export { MAX_MEDIA_DURATION_MS } from './transcription-types'
+export type { TranscriptionLanguage } from './transcription-types'
 
 /** One worker/model per job; only one PCM window may be in flight at a time. */
-function createWorkerSession(signal: AbortSignal | undefined, onProgress: (progress: TranscriptionProgress) => void) {
+function createWorkerSession(signal: AbortSignal | undefined, onProgress: (progress: TranscriptionProgress) => void, language: TranscriptionLanguage) {
   const worker = new Worker(new URL('./transcription.worker.ts', import.meta.url), { type: 'module' })
   let closed = false
   let failure: Error | undefined
@@ -52,7 +53,7 @@ function createWorkerSession(signal: AbortSignal | undefined, onProgress: (progr
       if (closed || pending) throw new Error('음성 분석 구간을 순서대로 처리해야 합니다.')
       return new Promise((resolve, reject) => {
         pending = { id: chunkId, resolve, reject }
-        const request: TranscriptionWorkerRequest = { type: 'transcribe', chunkId, audio, durationMs }
+        const request: TranscriptionWorkerRequest = { type: 'transcribe', chunkId, audio, durationMs, language }
         try { worker.postMessage(request, [audio.buffer]) } catch (error) {
           fail(error instanceof Error ? error : new Error('음성 AI를 시작하지 못했습니다.'))
         }
@@ -71,9 +72,9 @@ function createWorkerSession(signal: AbortSignal | undefined, onProgress: (progr
 
 export async function transcribeFile(
   file: File,
-  options: { signal?: AbortSignal; onProgress?: (progress: TranscriptionProgress) => void } = {}
+  options: { signal?: AbortSignal; onProgress?: (progress: TranscriptionProgress) => void; language?: TranscriptionLanguage } = {}
 ): Promise<BrowserTranscriptionResult> {
-  const { signal, onProgress } = options
+  const { signal, onProgress, language = 'korean' } = options
   checkAborted(signal)
   if (typeof Worker === 'undefined') throw new Error('이 브라우저는 웹 음성 분석을 지원하지 않습니다. 최신 Chrome·Edge에서 열어 주세요.')
   onProgress?.({ percent: 1, message: '파일에서 음성 트랙과 전체 영상 길이를 확인하고 있습니다.' })
@@ -89,7 +90,7 @@ export async function transcribeFile(
   }
   try {
     checkAborted(signal)
-    session = createWorkerSession(signal, report)
+    session = createWorkerSession(signal, report, language)
     for (const range of media.ranges) {
       index = range.id
       checkAborted(signal)

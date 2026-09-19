@@ -6,7 +6,9 @@ import {
   validateSubtitleRows
 } from '../shared/subtitle-rows'
 import type { ScriptRow } from '../shared/types'
-import { SAMPLE_MEDIA, SAMPLE_DESCRIPTION_ROWS } from './sample-media'
+import { SAMPLE_MEDIA } from './sample-media'
+import sampleTranscript from './sample-transcript.json'
+import type { TranscriptionLanguage } from './transcription-types'
 
 export const MAX_MEDIA_DURATION_MS = 3 * 60 * 60 * 1_000
 const MAX_ROWS = 20_000
@@ -24,6 +26,7 @@ export interface WebProject {
   source: 'sample' | 'manual' | 'subtitle' | 'transcription'
   sample?: boolean
   sampleId?: string
+  transcriptionLanguage?: TranscriptionLanguage
 }
 
 const identifierSchema = z.string().trim().min(1).max(200)
@@ -60,7 +63,8 @@ const projectSchema = z
     rows: z.array(rowSchema).max(MAX_ROWS),
     source: z.enum(['sample', 'manual', 'subtitle', 'transcription']),
     sample: z.boolean().optional(),
-    sampleId: z.literal('market-street-1906').optional()
+    sampleId: z.enum(['market-street-1906', 'shy-guy-1947']).optional(),
+    transcriptionLanguage: z.enum(['korean', 'english']).optional()
   })
   .superRefine((project, context) => {
     const ids = new Set<string>()
@@ -109,15 +113,15 @@ export function createProject(title = '새 화면해설 대본'): WebProject {
 
 export function createSampleProject(): WebProject {
   const sample = createProject(SAMPLE_MEDIA.title)
-  const rows: ScriptRow[] = SAMPLE_DESCRIPTION_ROWS.map(
-    ({ startMs, endMs, content }) => ({
+  const rows: ScriptRow[] = sampleTranscript.segments.map(
+    ({ id, startMs, endMs, text }) => ({
       id: globalThis.crypto.randomUUID(),
-      kind: 'descriptionGap',
+      kind: 'dialogue',
       startMs,
       endMs,
       speakers: [],
-      content,
-      sourceSegmentIds: [],
+      content: text,
+      sourceSegmentIds: [id],
       reviewed: false,
       reviewStatus: 'unreviewed'
     })
@@ -128,7 +132,8 @@ export function createSampleProject(): WebProject {
     rows,
     source: 'sample',
     sample: true,
-    sampleId: SAMPLE_MEDIA.id
+    sampleId: SAMPLE_MEDIA.id,
+    transcriptionLanguage: 'english'
   }
 }
 

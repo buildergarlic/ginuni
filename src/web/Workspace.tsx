@@ -5,6 +5,8 @@ import { addDescriptionCandidates } from '../shared/description-candidates'
 import { validateRows } from '../shared/rows'
 import type { WebProject } from './project'
 import { SAMPLE_MEDIA } from './sample-media'
+import { buildWebVttContent } from './vtt'
+import SampleComparison from './SampleComparison'
 
 interface Props {
   project: WebProject
@@ -42,6 +44,10 @@ export default function Workspace(props: Props) {
   const [localError, setLocalError] = useState('')
   const [offset, setOffset] = useState('0')
   const video = useRef<HTMLVideoElement>(null)
+  const stopAt = useRef<number | null>(null)
+  const rangeFrame = useRef<number | null>(null)
+  const rangeVersion = useRef(0)
+  const [captionUrl, setCaptionUrl] = useState('')
   const mediaInput = useRef<HTMLInputElement>(null)
   const srtInput = useRef<HTMLInputElement>(null)
   const selectedRow = project.rows.find((row) => row.id === selected)
@@ -60,12 +66,54 @@ export default function Workspace(props: Props) {
   useEffect(() => {
     setTime(0)
     setPlaying(false)
+    cancelRange()
+    return cancelRange
   }, [mediaSource])
+  useEffect(() => {
+    const subtitle = buildWebVttContent(project.rows)
+    if (!subtitle) { setCaptionUrl(''); return }
+    const url = URL.createObjectURL(new Blob([subtitle], { type: 'text/vtt' }))
+    setCaptionUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [project.rows])
 
+  function cancelRange() {
+    rangeVersion.current += 1
+    stopAt.current = null
+    if (rangeFrame.current !== null) cancelAnimationFrame(rangeFrame.current)
+    rangeFrame.current = null
+  }
   function seek(ms: number) {
+    cancelRange()
     setTime(ms)
     if (video.current && video.current.readyState > 0)
       video.current.currentTime = ms / 1000
+  }
+  async function playRange(startMs: number, endMs: number) {
+    seek(startMs)
+    const version = rangeVersion.current
+    stopAt.current = endMs
+    const checkEnd = () => {
+      if (rangeVersion.current !== version) return
+      const player = video.current
+      const end = stopAt.current
+      if (!player || end === null) return
+      if (player.currentTime * 1000 >= end) {
+        cancelRange()
+        player.pause()
+        player.currentTime = end / 1000
+        setTime(end)
+      } else rangeFrame.current = requestAnimationFrame(checkEnd)
+    }
+    try {
+      await video.current?.play()
+      if (rangeVersion.current === version && stopAt.current !== null)
+        rangeFrame.current = requestAnimationFrame(checkEnd)
+    } catch {
+      if (rangeVersion.current !== version) return
+      cancelRange()
+      setLocalError('영상 재생 버튼을 누른 뒤 다시 시도해 주세요.')
+    }
   }
   function select(row: ScriptRow) {
     setSelected(row.id)
@@ -299,14 +347,21 @@ export default function Workspace(props: Props) {
               긴 영상·큰 파일 자동 분할 · 최대 3시간
               <br />약 1분씩 순차 분석 · 원본 시간으로 자동 합치기
             </p>
+            <label>
+              음성 언어
+              <select aria-label="음성 언어" value={publicSample ? 'english' : project.transcriptionLanguage ?? 'korean'} disabled={busy || publicSample} onChange={event => props.onChange({ ...project, transcriptionLanguage: event.target.value as 'korean' | 'english' })}>
+                <option value="korean">한국어</option>
+                <option value="english">영어</option>
+              </select>
+            </label>
             <button
               className="primary"
-              disabled={!props.file || !rights || busy || props.mediaLoading}
+              disabled={(!publicSample && (!props.file || !rights)) || busy || props.mediaLoading}
               onClick={() => void props.onAnalyze()}
             >
               AI로 대사 만들기
             </button>
-            <small>첫 실행 시 모델 다운로드 · 한국어 초안 검수 필요</small>
+            <small>첫 실행 시 모델 다운로드 · 원어로 전사 · 초안 검수 필요</small>
           </div>
         </section>
       )}
@@ -338,7 +393,7 @@ export default function Workspace(props: Props) {
           <div className="pane-heading">
             <span>장면 보기</span>
             <span>
-              {publicSample ? '퍼블릭도메인 기록영상' : '내 기기 영상'}
+              {publicSample ? '실제 영어 대화 · 퍼블릭도메인' : '내 기기 영상'}
             </span>
           </div>
           {mediaSource ? (
@@ -351,7 +406,7 @@ export default function Workspace(props: Props) {
               src={mediaSource}
               poster={publicSample ? SAMPLE_MEDIA.poster : undefined}
               onPlay={() => setPlaying(true)}
-              onPause={() => setPlaying(false)}
+              onPause={() => { setPlaying(false); cancelRange() }}
               onEnded={() => setPlaying(false)}
               onLoadedMetadata={(e) => {
                 e.currentTarget.currentTime = Math.min(
@@ -359,9 +414,17 @@ export default function Workspace(props: Props) {
                   e.currentTarget.duration
                 )
               }}
-              onTimeUpdate={(e) =>
-                setTime(Math.round(e.currentTarget.currentTime * 1000))
-              }
+              onTimeUpdate={(e) => {
+                const currentMs = Math.round(e.currentTarget.currentTime * 1000)
+                setTime(currentMs)
+                if (stopAt.current !== null && currentMs >= stopAt.current) {
+                  const end = stopAt.current
+                  cancelRange()
+                  e.currentTarget.pause()
+                  e.currentTarget.currentTime = end / 1000
+                  setTime(end)
+                }
+              }}
               onError={() =>
                 setLocalError(
                   publicSample
@@ -369,7 +432,9 @@ export default function Workspace(props: Props) {
                     : '영상 재생 중 오류가 발생했습니다. 브라우저가 지원하는 MP4(H.264/AAC)로 변환해 주세요.'
                 )
               }
-            />
+            >
+              {captionUrl && <track key={captionUrl} src={captionUrl} kind="subtitles" srcLang={project.transcriptionLanguage === 'english' ? 'en' : 'ko'} label="대본 자막" default onLoad={event => { event.currentTarget.track.mode = 'showing' }} />}
+            </video>
           ) : (
             <div className="media-empty">
               <span className="media-empty-icon">▷</span>
@@ -395,11 +460,11 @@ export default function Workspace(props: Props) {
           {publicSample && (
             <div className="sample-credit">
               <strong>{SAMPLE_MEDIA.title}</strong>
-              <p>{SAMPLE_MEDIA.credit} · 원본 00:45–01:45 발췌</p>
+              <p>{SAMPLE_MEDIA.credit} · 원본 01:10–02:10 발췌</p>
               <p>
-                실제 무성 기록영상입니다. 대사를 만들지 않았으며, 해설 예문을
-                직접 수정하며 작업할 수 있습니다.
+                배우 두 사람의 실제 영어 대화입니다. {project.source === 'sample' ? '오른쪽은 이 영상으로 미리 실행한 AI 초안입니다.' : '오른쪽 대본과 원음을 대조하세요.'} 대사 행의 구간 재생 버튼으로 시작·끝을 확인하고 틀린 말과 시간을 수정하세요.
               </p>
+              <button className="primary" disabled={busy || props.mediaLoading} onClick={() => void props.onAnalyze()}>샘플 음성 AI 다시 분석</button>
               <a href={SAMPLE_MEDIA.sourceUrl} target="_blank" rel="noreferrer">
                 원본 영상·퍼블릭도메인 출처 확인 ↗
               </a>
@@ -446,6 +511,7 @@ export default function Workspace(props: Props) {
               onChange={(e) => seek(Number(e.target.value))}
             />
           </div>
+          {publicSample && <SampleComparison rows={project.rows} onPlay={(start, end) => void playRange(start, end)} />}
           <div className="writer-note">
             <span className="eyebrow">작가의 시선으로</span>
             <h2>대사 사이, 이야기가 머무는 곳.</h2>
@@ -571,6 +637,7 @@ export default function Workspace(props: Props) {
                   </button>
                   {selectedRow?.id === row.id && (
                     <div className="row-editor">
+                      {mediaSource && <button className="secondary row-play" onClick={() => void playRange(row.startMs, row.endMs)} aria-label="선택한 대사 구간 재생">▶ 이 구간 듣기</button>}
                       <div className="time-fields">
                         <TimeField
                           key={`${row.id}-start-${row.startMs}`}

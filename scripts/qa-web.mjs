@@ -10,6 +10,16 @@ const { chromium } = process.env.GINUNI_PLAYWRIGHT_MODULE
   : await import('playwright')
 const output = resolve('output/playwright')
 await mkdir(output, { recursive: true })
+const sampleTranscript = JSON.parse(
+  await readFile(resolve('src/web/sample-transcript.json'), 'utf8')
+)
+assert.ok(sampleTranscript.segments.length > 1, 'The sample must contain the actual captured speech transcript before QA runs.')
+const dialogueValues = (rows) => rows.map(({ startMs, endMs, content, sourceSegmentIds }) => ({
+  startMs, endMs, content, sourceSegmentIds
+}))
+const expectedSampleRows = sampleTranscript.segments.map(({ id, startMs, endMs, text }) => ({
+  startMs, endMs, content: text, sourceSegmentIds: [id]
+}))
 const browser = await chromium.launch({
   channel: process.env.GINUNI_BROWSER_CHANNEL || 'msedge',
   headless: true
@@ -48,14 +58,27 @@ function silentWav(seconds) {
   bytes.writeUInt32LE(dataBytes, 40)
   return bytes
 }
-async function download(button, extension) {
+function parseSrt(text) {
+  const time = (value) => {
+    const [hours, minutes, seconds, milliseconds] = value.split(/[:,]/).map(Number)
+    return hours * 3_600_000 + minutes * 60_000 + seconds * 1000 + milliseconds
+  }
+  return text.trim().split(/\r?\n\s*\r?\n/).map((block, index) => {
+    const [number, timing, ...lines] = block.split(/\r?\n/)
+    assert.equal(Number(number), index + 1)
+    assert.match(timing, /^\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}$/)
+    const [start, end] = timing.split(' --> ')
+    return { startMs: time(start), endMs: time(end), content: lines.join('\n') }
+  })
+}
+async function download(button, extension, basename = 'web-export') {
   if ((await page.locator('.export-menu').getAttribute('open')) === null)
     await page.locator('.export-menu summary').click()
   const pending = page.waitForEvent('download')
   await page.getByRole('button', { name: button }).click()
   const file = await pending
   assert.ok(file.suggestedFilename().endsWith(extension))
-  const path = resolve(output, `web-export${extension}`)
+  const path = resolve(output, `${basename}${extension}`)
   await file.saveAs(path)
   return path
 }
@@ -72,8 +95,13 @@ try {
   await page
     .getByRole('button', { name: '샘플로 바로 체험하기', exact: false })
     .click()
-  assert.equal(await page.locator('.script-row').count(), 6)
+  assert.equal(await page.locator('.script-row').count(), expectedSampleRows.length)
   assert.equal(await page.locator('.sample-scene, .walkers').count(), 0)
+  const originalSample = (await persisted())[0]
+  assert.equal(originalSample.sampleId, 'shy-guy-1947')
+  assert.equal(originalSample.transcriptionLanguage, 'english')
+  assert.ok(originalSample.rows.every(row => row.kind === 'dialogue' && row.reviewed === false))
+  assert.deepEqual(dialogueValues(originalSample.rows), expectedSampleRows)
   await page.waitForFunction(
     () => document.querySelector('video')?.readyState >= 2
   )
@@ -83,15 +111,32 @@ try {
   )
   assert.ok(
     (await page.locator('video').getAttribute('src')).includes(
-      'sample-market-street-1906'
+      'sample-shy-guy-1947'
     )
   )
   assert.equal(
     await page
       .getByRole('link', { name: '원본 영상·퍼블릭도메인 출처 확인 ↗' })
       .getAttribute('href'),
-    'https://archive.org/details/ATripDownMarketStreet_HD'
+    'https://archive.org/details/ShyGuy1947'
   )
+  assert.equal(await page.getByRole('button', { name: '샘플 음성 AI 다시 분석', exact: true }).isEnabled(), true)
+  assert.equal(await page.getByLabel('영상·음성 파일', { exact: true }).evaluate(input => input.files.length), 0)
+  await page.waitForFunction(
+    count => document.querySelector('video')?.textTracks[0]?.cues?.length === count,
+    expectedSampleRows.length
+  )
+  const captionCues = await page.locator('video').evaluate(video => {
+    const track = video.textTracks[0]
+    return { language: track.language, mode: track.mode, cues: Array.from(track.cues, cue => ({
+      startMs: Math.round(cue.startTime * 1000),
+      endMs: Math.round(cue.endTime * 1000),
+      content: cue.text
+    })) }
+  })
+  assert.equal(captionCues.language, 'en')
+  assert.equal(captionCues.mode, 'showing')
+  assert.deepEqual(captionCues.cues, expectedSampleRows.map(({ sourceSegmentIds, ...cue }) => cue))
   await page.getByRole('button', { name: '영상 재생', exact: true }).click()
   await page.waitForFunction(
     () => document.querySelector('video').currentTime > 0.2
@@ -100,22 +145,38 @@ try {
     .getByRole('button', { name: '영상 일시 정지', exact: true })
     .click()
   record(
-    'Bundled public-domain film loads and actually plays, with its source visible.'
+    'Real voiced Shy Guy film plays with its source, captured English dialogue, native timed captions, and no-file AI action available.'
   )
+  const firstCue = expectedSampleRows[0]
+  await page.getByRole('button', { name: '선택한 대사 구간 재생', exact: true }).click()
+  await page.waitForFunction(startMs => {
+    const video = document.querySelector('video')
+    return video && !video.paused && Math.abs(video.currentTime * 1000 - startMs) <= 250
+  }, firstCue.startMs)
+  await page.waitForFunction(endMs => {
+    const video = document.querySelector('video')
+    return video && video.paused && Math.abs(video.currentTime * 1000 - endMs) <= 20
+  }, firstCue.endMs)
+  const stoppedAtMs = await page.locator('video').evaluate(video => video.currentTime * 1000)
+  assert.ok(Math.abs(stoppedAtMs - firstCue.endMs) <= 20, 'Selected-cue playback must pause at its exact end, within 20ms.')
+  record('Selected dialogue playback seeks to its start and automatically pauses at its end within 20ms.')
+  const editedDialogue = `${expectedSampleRows[0].content} [QA edit]`
   await page
-    .getByRole('textbox', { name: '화면해설 내용', exact: true })
-    .fill('철로를 따라 마차와 자동차가 오가는 실제 거리 모습.')
-  await page.getByRole('button', { name: '해설', exact: true }).click()
+    .getByRole('textbox', { name: '대사 내용', exact: true })
+    .fill(editedDialogue)
+  await page.getByRole('button', { name: '미확인', exact: true }).click()
   await page.getByRole('button', { name: '확인 완료 · 다음 →' }).click()
-  assert.equal(await page.locator('.script-row.selected.gap').count(), 1)
+  await page.waitForFunction(
+    () => document.querySelector('.row-editor textarea') === document.activeElement
+  )
+  assert.equal(await page.locator('.script-row.selected:not(.gap)').count(), 1)
+  assert.equal(await page.getByRole('textbox', { name: '대사 내용', exact: true }).inputValue(), expectedSampleRows[1].content)
   assert.equal(await page.locator('.row-editor textarea:focus').count(), 1)
   record(
-    'Sample editing, description-only next review, and keyboard focus pass.'
+    'Actual dialogue editing, pending-only next review, and keyboard focus pass.'
   )
   await page.getByRole('button', { name: '전체', exact: true }).click()
-  await page
-    .getByRole('button', { name: '00:00 해설 선택', exact: true })
-    .click()
+  await page.locator('.script-row .row-select').first().click()
   await page.getByRole('textbox', { name: '시작 시간', exact: true }).focus()
   await page.keyboard.press('Tab')
   assert.equal((await persisted())[0].rows[0].reviewed, true)
@@ -124,19 +185,22 @@ try {
     new Uint8Array(await readFile(await download('HWPX 한글 대본', '.hwpx')))
   )
   assert.ok(
-    strFromU8(hwpx['Contents/section0.xml']).includes('철로를 따라 마차')
+    strFromU8(hwpx['Contents/section0.xml']).includes('[QA edit]')
   )
   assert.equal(strFromU8(hwpx.mimetype), 'application/hwp+zip')
-  await page.getByRole('button', { name: 'SRT 자막' }).click()
-  await page
-    .getByRole('alert')
-    .filter({ hasText: 'SRT로 저장할 대사 행이 없습니다' })
-    .waitFor()
-  record('Silent-film sample contains no invented dialogue or SRT transcript.')
+  const sampleSrt = parseSrt(await readFile(await download('SRT 자막', '.srt', 'web-sample-export'), 'utf8'))
+  assert.deepEqual(sampleSrt, expectedSampleRows.map(({ sourceSegmentIds, ...cue }, index) => ({
+    ...cue, content: index === 0 ? editedDialogue : cue.content
+  })))
+  record('Sample SRT exports the real speech transcript and preserves every captured millisecond timestamp.')
   const backupPath = await download('JSON 작업 백업', '.json')
   const backup = JSON.parse(await readFile(backupPath, 'utf8'))
   assert.equal(backup.rows[0].reviewed, true)
-  record('Actual-film HWPX and canonical JSON downloads pass.')
+  assert.equal(backup.sampleId, 'shy-guy-1947')
+  assert.deepEqual(dialogueValues(backup.rows), expectedSampleRows.map((row, index) => ({
+    ...row, content: index === 0 ? editedDialogue : row.content
+  })))
+  record('Actual-speech HWPX and canonical JSON downloads preserve text, source segments, and timing.')
   await page.screenshot({
     path: resolve(output, 'web-workspace-desktop.png'),
     fullPage: true
@@ -144,11 +208,11 @@ try {
   await page.reload({ waitUntil: 'networkidle' })
   await page
     .locator('.project-open')
-    .filter({ hasText: '1906년 샌프란시스코' })
+    .filter({ hasText: 'Shy Guy (1947)' })
     .click()
   assert.equal(
     await page
-      .getByRole('textbox', { name: '화면해설 내용', exact: true })
+      .getByRole('textbox', { name: '대사 내용', exact: true })
       .inputValue(),
     backup.rows[0].content
   )

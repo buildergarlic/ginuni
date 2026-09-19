@@ -1,0 +1,157 @@
+{
+  "sampleId": "shy-guy-1947",
+  "language": "english",
+  "model": "Xenova/whisper-base.en",
+  "modelRevision": "95bf40a508535962c6483ead40270b2e32267508",
+  "generatedAt": "2026-09-19T14:13:17.663Z",
+  "capture": "Microsoft Edge / Transformers.js 3.8.1 / WASM q8 / actual bundled MP4",
+  "segments": [
+    {
+      "id": "web-chunk-1-recovery-web-segment-1",
+      "startMs": 2000,
+      "endMs": 4600,
+      "text": "Hello Phil. How's everything?",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-recovery-web-segment-2",
+      "startMs": 4600,
+      "endMs": 6560,
+      "text": "Oh okay I guess Dad.",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-recovery-web-segment-3",
+      "startMs": 6560,
+      "endMs": 9160,
+      "text": "Is your record transmitter and microphone coming?",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-recovery-web-segment-4",
+      "startMs": 9160,
+      "endMs": 12840,
+      "text": "Alright I guess. I know it doesn't either.",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-recovery-web-segment-5",
+      "startMs": 12840,
+      "endMs": 15640,
+      "text": "I can't figure out where to connect in the oscillator.",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-recovery-web-segment-6",
+      "startMs": 15640,
+      "endMs": 19840,
+      "text": "I know I have to connect it into the amplifier but where it just doesn't fit in.",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-1",
+      "startMs": 20000,
+      "endMs": 22760,
+      "text": "Why not store and get more information.",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-2",
+      "startMs": 22760,
+      "endMs": 25760,
+      "text": "And by the way, how things going in school?",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-3",
+      "startMs": 25760,
+      "endMs": 28600,
+      "text": "Oh, okay, Dad.",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-4",
+      "startMs": 28600,
+      "endMs": 31840,
+      "text": "But school here isn't like it was back in Morris to.",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-5",
+      "startMs": 31840,
+      "endMs": 35760,
+      "text": "Well, you know, son, maybe school is like your radio.",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-6",
+      "startMs": 35760,
+      "endMs": 38320,
+      "text": "This oscillator will do its work well.",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-7",
+      "startMs": 38320,
+      "endMs": 41520,
+      "text": "But as you said, you still have to fit it in",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-8",
+      "startMs": 41520,
+      "endMs": 43960,
+      "text": "so it can work with all the other parts.",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-9",
+      "startMs": 43960,
+      "endMs": 46920,
+      "text": "I know what you're driving at dad but",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-10",
+      "startMs": 46920,
+      "endMs": 49740,
+      "text": "i don't think i ever will fit in not here",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-11",
+      "startMs": 49740,
+      "endMs": 52280,
+      "text": "i'm different from the guys in this town",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-12",
+      "startMs": 52280,
+      "endMs": 55260,
+      "text": "well as far as that goes for everybody's different",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-13",
+      "startMs": 55260,
+      "endMs": 57040,
+      "text": "that's what makes people interesting",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-14",
+      "startMs": 57040,
+      "endMs": 58920,
+      "text": "maybe",
+      "speakerId": ""
+    },
+    {
+      "id": "web-chunk-1-web-segment-15",
+      "startMs": 58920,
+      "endMs": 59440,
+      "text": "you know",
+      "speakerId": ""
+    }
+  ]
+}
