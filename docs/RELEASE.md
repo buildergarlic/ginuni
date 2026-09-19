@@ -40,7 +40,7 @@
 ## 공개 전환 체크리스트
 
 - GitHub Sponsors 주소, `.github/FUNDING.yml`, 앱의 후원 CTA가 모두 `buildergarlic` 계정을 가리키는지 확인합니다.
-- GiNuNi 자체 소스 코드의 라이선스는 소유자가 채택한 Apache-2.0입니다. 루트 `LICENSE`·`NOTICE`, `package.json`·`package-lock.json`의 라이선스 표시를 일치시킵니다.
+- GiNuNi 자체 소스 코드의 라이선스는 소유자가 채택한 AGPL-3.0-only입니다. 루트 `LICENSE`·`NOTICE`, `package.json`·`package-lock.json`의 라이선스 표시를 일치시킵니다.
 - 패키징 후 `release/win-unpacked/resources/licenses`에 루트 `LICENSE`·`NOTICE`·`THIRD_PARTY_NOTICES.md`와 `resources/licenses`의 제3자 고지·전문이 모두 포함됐는지 확인합니다. 루트 파일은 `build.extraResources`에서 직접 복사하므로 별도 사본을 수동 관리하지 않습니다.
 - FFmpeg·FFprobe의 실제 `-version`·`-L` 출력과 포함 라이브러리를 확인하고, 배포 바이너리에 대응하는 소스·빌드 자료의 제공 경로를 릴리스 다운로드 옆에 명시합니다. 라이선스 전문이나 프로젝트 홈페이지 링크만으로 대응 소스 제공 확인을 대신하지 않습니다. 자세한 범위는 [제3자 구성 요소 고지](../THIRD_PARTY_NOTICES.md)를 따릅니다.
 - 저장소 공개 전 API 키, 개인 영상 경로, 사용자 프로젝트, 민감한 HWPX 내용이 Git 이력에 없는지 검사합니다.

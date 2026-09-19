@@ -1,6 +1,6 @@
 # 제3자 구성 요소 고지
 
-GiNuNi 자체 소스 코드에는 Apache License 2.0이 적용됩니다. 아래 제3자 소프트웨어·모델 등은 각각의 원래 저작권과 라이선스를 유지하며, GiNuNi의 라이선스로 재허가되지 않습니다.
+GiNuNi 자체 소스 코드에는 GNU Affero General Public License v3.0 (AGPL-3.0-only)이 적용됩니다. 아래 제3자 소프트웨어·모델 등은 각각의 원래 저작권과 라이선스를 유지하며, GiNuNi의 라이선스로 재허가되지 않습니다.
 
 프로젝트 `LICENSE`·`NOTICE`·이 파일과 `resources/licenses`의 고지·전문은 설치 폴더의 `resources/licenses`에도 포함됩니다. 설치본은 다음 구성 요소를 포함하거나 내려받아 사용합니다. 공개 배포 전 실제 포함 버전과 라이선스를 다시 확인하세요.
 

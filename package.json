@@ -4,7 +4,7 @@
   "description": "영상 음성과 화자를 분석해 화면해설 작업용 HWPX 대본을 만드는 Windows 데스크톱 앱",
   "main": "out/main/index.js",
   "author": "BuilderGarlic",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
   "scripts": {

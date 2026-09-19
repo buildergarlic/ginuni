@@ -98,12 +98,12 @@ npm run dist:win
 
 ## 라이선스
 
-GiNuNi의 자체 소스 코드는 [Apache License 2.0](LICENSE)으로 배포합니다. Copyright 2026 BuilderGarlic.
+GiNuNi의 자체 소스 코드는 [GNU Affero General Public License v3.0 (AGPL-3.0-only)](LICENSE)으로 배포합니다. Copyright 2026 BuilderGarlic.
 
 - 라이선스 조건에 따라 상업적 사용, 수정, 재배포가 가능합니다. 재배포 시 라이선스·저작권·관련 [NOTICE](NOTICE)를 보존하고, 수정한 파일에는 변경 사실을 표시하세요.
 - 제3자 소프트웨어·모델 등에는 각각의 원래 라이선스가 적용됩니다. [제3자 구성 요소 고지](THIRD_PARTY_NOTICES.md)와 [라이선스 전문](resources/licenses)을 확인하세요.
 - 설치본에는 전문과 고지가 설치 폴더의 `resources/licenses`에 포함됩니다. 앱의 **About GiNuNi**에서도 라이선스와 위치를 안내합니다.
-- Apache License 2.0은 제6조에 정한 경우를 제외하고 GiNuNi·BuilderGarlic의 상표 사용권을 부여하지 않습니다.
+- 이 라이선스 변경은 GiNuNi·BuilderGarlic의 상표 사용권을 부여하지 않습니다.
 - 앱을 사용해 작성한 대사·화면해설에 앱의 소스 코드 라이선스가 자동으로 적용되지는 않습니다. 입력 영상·자막·양식 등 제3자 자료의 권리는 별도로 확인해야 합니다.
 
 ## 개인정보와 저작권
