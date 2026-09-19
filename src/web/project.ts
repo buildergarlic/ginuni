@@ -9,11 +9,24 @@ import type { ScriptRow } from '../shared/types'
 import { SAMPLE_MEDIA } from './sample-media'
 import sampleTranscript from './sample-transcript.json'
 import type { TranscriptionLanguage } from './transcription-types'
+import { SPEECH_LANGUAGES, TRANSLATION_LANGUAGE_CODES, type TranslationSourceLanguage } from './languages'
 
 export const MAX_MEDIA_DURATION_MS = 3 * 60 * 60 * 1_000
 const MAX_ROWS = 20_000
 const MAX_PROJECTS = 10
 const STORAGE_KEY = 'ginuni-web-projects-v1'
+
+export interface RowTranslation {
+  sourceContent: string
+  content: string
+  draft: string
+  reviewed: boolean
+  approvedAt?: string
+}
+
+export interface WebScriptRow extends ScriptRow {
+  translation?: RowTranslation
+}
 
 export interface WebProject {
   schemaVersion: 1
@@ -22,11 +35,13 @@ export interface WebProject {
   updatedAt: string
   mediaName: string
   durationMs: number
-  rows: ScriptRow[]
+  rows: WebScriptRow[]
   source: 'sample' | 'manual' | 'subtitle' | 'transcription'
   sample?: boolean
   sampleId?: string
   transcriptionLanguage?: TranscriptionLanguage
+  dialogueLanguage?: 'original' | 'korean'
+  translationSourceLanguage?: TranslationSourceLanguage
 }
 
 const identifierSchema = z.string().trim().min(1).max(200)
@@ -46,7 +61,14 @@ const rowSchema = z
     reviewStatus: z
       .enum(['unreviewed', 'needsAttention', 'approved'])
       .optional(),
-    approvedAt: z.string().datetime({ offset: true }).optional()
+    approvedAt: z.string().datetime({ offset: true }).optional(),
+    translation: z.object({
+      sourceContent: z.string().max(10_000),
+      content: z.string().max(10_000),
+      draft: z.string().max(10_000),
+      reviewed: z.boolean().default(false),
+      approvedAt: z.string().datetime({ offset: true }).optional()
+    }).optional()
   })
   .refine((row) => row.endMs > row.startMs, {
     message: '행의 종료 시간은 시작 시간보다 뒤여야 합니다.'
@@ -64,7 +86,9 @@ const projectSchema = z
     source: z.enum(['sample', 'manual', 'subtitle', 'transcription']),
     sample: z.boolean().optional(),
     sampleId: z.enum(['market-street-1906', 'shy-guy-1947']).optional(),
-    transcriptionLanguage: z.enum(['korean', 'english']).optional()
+    transcriptionLanguage: z.enum(SPEECH_LANGUAGES.map(item => item.speech)).optional(),
+    dialogueLanguage: z.enum(['original', 'korean']).optional(),
+    translationSourceLanguage: z.enum(TRANSLATION_LANGUAGE_CODES).optional()
   })
   .superRefine((project, context) => {
     const ids = new Set<string>()

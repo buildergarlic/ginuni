@@ -133,6 +133,16 @@ describe('persistent browser transcription worker', () => {
     expect(replies.some((reply) => reply.type === 'error')).toBe(false)
   })
 
+  it('keeps Japanese dictation in the source language using the multilingual model', async () => {
+    mocks.transcribe.mockResolvedValueOnce({ chunks: [{ text: 'こんにちは。', timestamp: [0.1, 0.8] }] })
+    send({ type: 'transcribe', chunkId: 40, audio: new Float32Array(16000).fill(0.25), durationMs: 1000, language: 'japanese' })
+    await waitForChunk(40)
+    expect(mocks.pipeline).toHaveBeenCalledWith('automatic-speech-recognition', TRANSCRIPTION_MODEL, expect.any(Object))
+    expect(mocks.transcribe).toHaveBeenCalledWith(expect.any(Float32Array), expect.objectContaining({ language: 'japanese', task: 'transcribe' }))
+    expect(replies).toContainEqual({ type: 'chunk', chunkId: 40, segments: [{ id: 'web-segment-1', startMs: 100, endMs: 800, speakerId: '', text: 'こんにちは。' }] })
+    expect(replies).toContainEqual({ type: 'progress', chunkId: 40, progress: { percent: 42, message: '기기에서 일본어 음성을 분석하고 있습니다.' } })
+  })
+
   it('accepts an empty model result and retains the model for the next chunk', async () => {
     mocks.transcribe.mockResolvedValueOnce({ text: '', chunks: [] })
     send(voicedChunk(4))

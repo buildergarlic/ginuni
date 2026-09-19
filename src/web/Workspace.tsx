@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ScriptRow } from '../shared/types'
 import { formatTimecode, parseTimecode } from '../shared/timecode'
 import { addDescriptionCandidates } from '../shared/description-candidates'
@@ -7,12 +7,16 @@ import type { WebProject } from './project'
 import { SAMPLE_MEDIA } from './sample-media'
 import { buildWebVttContent } from './vtt'
 import SampleComparison from './SampleComparison'
+import { displayRows } from './translation-project'
+import TranslationPanel from './TranslationPanel'
+import { SPEECH_LANGUAGES, translationLanguageForSpeech, type SpeechLanguage } from './languages'
 
 interface Props {
   project: WebProject
   file: File | null
   mediaUrl: string
   busy: boolean
+  busyOperation: 'transcription' | 'translation'
   mediaLoading: boolean
   progress: { percent: number; message: string }
   saveError: string
@@ -23,13 +27,16 @@ interface Props {
   onMedia: (file: File) => Promise<void>
   onSubtitle: (file: File, offsetMs: number) => Promise<void>
   onAnalyze: () => Promise<void>
+  onTranslate: () => Promise<void>
+  onRestoreTranslation: (rowId?: string) => void
   onCancel: () => void
   onUndo: () => void
   onExport: (format: 'hwpx' | 'srt' | 'json') => Promise<void>
 }
 
 export default function Workspace(props: Props) {
-  const { project, busy } = props
+  const { project: originalProject, busy } = props
+  const project = useMemo(() => ({ ...originalProject, rows: displayRows(originalProject) }), [originalProject])
   const publicSample =
     project.sample === true && project.sampleId === SAMPLE_MEDIA.id
   const mediaSource = props.mediaUrl || (publicSample ? SAMPLE_MEDIA.url : '')
@@ -222,11 +229,11 @@ export default function Workspace(props: Props) {
               maxLength={150}
               disabled={busy}
               onChange={(event) =>
-                props.onChange({ ...project, title: event.target.value })
+                props.onChange({ ...originalProject, title: event.target.value })
               }
               onBlur={() => {
                 if (!project.title.trim())
-                  props.onChange({ ...project, title: '새 화면해설 대본' })
+                  props.onChange({ ...originalProject, title: '새 화면해설 대본' })
               }}
             />
             <span
@@ -349,9 +356,8 @@ export default function Workspace(props: Props) {
             </p>
             <label>
               음성 언어
-              <select aria-label="음성 언어" value={publicSample ? 'english' : project.transcriptionLanguage ?? 'korean'} disabled={busy || publicSample} onChange={event => props.onChange({ ...project, transcriptionLanguage: event.target.value as 'korean' | 'english' })}>
-                <option value="korean">한국어</option>
-                <option value="english">영어</option>
+              <select aria-label="음성 언어" value={publicSample ? 'english' : project.transcriptionLanguage ?? 'korean'} disabled={busy || publicSample} onChange={event => props.onChange({ ...originalProject, transcriptionLanguage: event.target.value as SpeechLanguage })}>
+                {SPEECH_LANGUAGES.map(item => <option key={item.speech} value={item.speech}>{item.label}</option>)}
               </select>
             </label>
             <button
@@ -365,18 +371,19 @@ export default function Workspace(props: Props) {
           </div>
         </section>
       )}
+      <TranslationPanel project={originalProject} busy={busy || props.mediaLoading} onTranslate={props.onTranslate} onChange={props.onChange} onRestore={() => props.onRestoreTranslation()} />
       {busy && (
         <section className="analysis-progress" aria-live="polite">
           <div>
             <strong>{props.progress.message}</strong>
             <p>
-              필요한 음성 구간만 차례로 읽어 분석합니다. 이 창을 열어 두세요. 첫
-              실행에는 모델 다운로드가 필요하고 긴 영상은 시간이 걸립니다.
+              이 창을 열어 두세요. 첫 실행에는 모델 다운로드가 필요하며,
+              긴 영상이나 많은 대사는 처리에 시간이 걸립니다.
             </p>
             <progress max="100" value={props.progress.percent} />
           </div>
           <button className="secondary" onClick={props.onCancel}>
-            분석 취소
+            {props.busyOperation === 'translation' ? '번역 취소' : '분석 취소'}
           </button>
         </section>
       )}
@@ -433,7 +440,7 @@ export default function Workspace(props: Props) {
                 )
               }
             >
-              {captionUrl && <track key={captionUrl} src={captionUrl} kind="subtitles" srcLang={project.transcriptionLanguage === 'english' ? 'en' : 'ko'} label="대본 자막" default onLoad={event => { event.currentTarget.track.mode = 'showing' }} />}
+              {captionUrl && <track key={captionUrl} src={captionUrl} kind="subtitles" srcLang={project.dialogueLanguage === 'korean' ? 'ko' : project.translationSourceLanguage ?? translationLanguageForSpeech(project.transcriptionLanguage) ?? 'ko'} label="대본 자막" default onLoad={event => { event.currentTarget.track.mode = 'showing' }} />}
             </video>
           ) : (
             <div className="media-empty">
@@ -511,7 +518,7 @@ export default function Workspace(props: Props) {
               onChange={(e) => seek(Number(e.target.value))}
             />
           </div>
-          {publicSample && <SampleComparison rows={project.rows} onPlay={(start, end) => void playRange(start, end)} />}
+          {publicSample && <SampleComparison rows={originalProject.rows} onPlay={(start, end) => void playRange(start, end)} />}
           <div className="writer-note">
             <span className="eyebrow">작가의 시선으로</span>
             <h2>대사 사이, 이야기가 머무는 곳.</h2>
@@ -690,7 +697,7 @@ export default function Workspace(props: Props) {
                         htmlFor={`content-${row.id}`}
                       >
                         {row.kind === 'dialogue'
-                          ? '대사 내용'
+                          ? project.dialogueLanguage === 'korean' ? '한국어 대사 내용' : '대사 내용'
                           : '화면해설 내용'}
                       </label>
                       <textarea
@@ -708,6 +715,12 @@ export default function Workspace(props: Props) {
                             : '보이는 장면을 짧고 선명하게 적어 보세요.'
                         }
                       />
+                      {project.dialogueLanguage === 'korean' && row.kind === 'dialogue' && <div className="translation-original">
+                        <strong>원문</strong>
+                        <p>{originalProject.rows.find(item => item.id === row.id)?.content}</p>
+                        {originalProject.rows.find(item => item.id === row.id)?.translation?.draft.trim() &&
+                          <button className="quiet" disabled={busy} onClick={() => props.onRestoreTranslation(row.id)}>이 대사 처음 번역으로 복원</button>}
+                      </div>}
                       <div className="editor-actions">
                         <button
                           className="quiet danger-text"

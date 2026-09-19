@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ScriptRow } from '../src/shared/types'
 import { SAMPLE_MEDIA } from '../src/web/sample-media'
 import sampleTranscript from '../src/web/sample-transcript.json'
+import { SPEECH_LANGUAGES, TRANSLATION_LANGUAGE_CODES } from '../src/web/languages'
 import {
   createProject,
   createSampleProject,
@@ -174,6 +175,61 @@ describe('browser draft storage', () => {
     vi.stubGlobal('localStorage', undefined)
     expect(() => loadProjects()).toThrow(/저장/)
     expect(() => saveProject(project())).toThrow(/저장/)
+  })
+})
+
+describe('web translation backup compatibility', () => {
+  const translation = {
+    sourceContent: 'Hello.', content: '수정한 번역입니다.', draft: '안녕하세요.',
+    reviewed: true, approvedAt: '2026-09-19T13:00:00.000Z'
+  }
+
+  it('round trips source, Korean edit, original machine draft and separate review state through storage and JSON', () => {
+    const translated = project({
+      dialogueLanguage: 'korean', translationSourceLanguage: 'en', transcriptionLanguage: 'english',
+      rows: [{ ...row({ content: 'Hello.', reviewed: false, sourceCueIds: ['cue-original'] }), translation }]
+    })
+    const restored = parseProject(serializeProject(translated))
+    expect(restored).toEqual(translated)
+    saveProject(restored)
+    expect(loadProjects()[0]).toEqual(translated)
+    storage.quotaExceeded = true
+    expect(() => saveProject({ ...translated, dialogueLanguage: 'original' })).toThrow(/저장/)
+    expect(loadProjects()[0]).toEqual(translated)
+  })
+
+  it('retains old v1 drafts without adding translation fields or changing their content', () => {
+    const old = project()
+    const restored = parseProject(serializeProject(old))
+    expect(restored).toEqual(old)
+    expect(restored.rows[0]).not.toHaveProperty('translation')
+    expect(restored).not.toHaveProperty('dialogueLanguage')
+    expect(restored).not.toHaveProperty('translationSourceLanguage')
+  })
+
+  it('accepts every supported speech/translation language and excludes unsupported language values', () => {
+    for (const { speech } of SPEECH_LANGUAGES)
+      expect(parseProject(serializeProject(project({ transcriptionLanguage: speech }))).transcriptionLanguage).toBe(speech)
+    for (const code of TRANSLATION_LANGUAGE_CODES)
+      expect(parseProject(serializeProject(project({ translationSourceLanguage: code }))).translationSourceLanguage).toBe(code)
+    for (const overrides of [{ transcriptionLanguage: 'unknown' }, { translationSourceLanguage: 'ko' }, { dialogueLanguage: 'english' }])
+      expect(() => parseProject(JSON.stringify({ ...project(), ...overrides }))).toThrow()
+  })
+
+  it('canonicalizes translation metadata and treats missing translation approval as unreviewed', () => {
+    const restored = parseProject(JSON.stringify({ ...project(), rows: [{ ...row(), translation: { ...translation, reviewed: undefined, privateToken: 'never-store' } }] }))
+    expect(restored.rows[0].translation?.reviewed).toBe(false)
+    expect(restored.rows[0].translation).not.toHaveProperty('privateToken')
+  })
+
+  it.each([
+    { sourceContent: 'a'.repeat(10001) }, { content: '가'.repeat(10001) }, { draft: '가'.repeat(10001) },
+    { sourceContent: 12 }, { content: null }, { draft: undefined }, { reviewed: 'yes' }, { approvedAt: 'yesterday' }
+  ])('rejects invalid translation backups without changing saved originals (%#)', invalid => {
+    saveProject(project())
+    const before = storage.getItem(STORAGE_KEY)
+    expect(() => parseProject(JSON.stringify({ ...project(), rows: [{ ...row(), translation: { ...translation, ...invalid } }] }))).toThrow()
+    expect(storage.getItem(STORAGE_KEY)).toBe(before)
   })
 })
 

@@ -13,9 +13,11 @@ import {
   TRANSCRIPTION_ENGLISH_MODEL_REVISION,
   TRANSCRIPTION_SAMPLE_RATE,
   validateMediaDuration,
+  type TranscriptionLanguage,
   type TranscriptionWorkerRequest,
   type TranscriptionWorkerResponse
 } from './transcription-types'
+import { SPEECH_LANGUAGES } from './languages'
 
 // Browser-only inference: remote GET requests download public model weights; no media is uploaded.
 env.allowLocalModels = false
@@ -31,7 +33,7 @@ const scope = globalThis as unknown as {
 }
 
 let transcriber: AutomaticSpeechRecognitionPipeline | undefined
-let transcriberLanguage: 'korean' | 'english' | undefined
+let transcriberLanguage: TranscriptionLanguage | undefined
 
 /** Keep quiet speech and ordinary pauses; remove only sustained near-digital silence. */
 function findSoundWindows(audio: Float32Array): { start: number; end: number }[] {
@@ -151,7 +153,7 @@ async function handleRequest(data: TranscriptionWorkerRequest): Promise<void> {
     let completedInferences = 0
     const segments: ReturnType<typeof normalizeTranscript> = []
     const activeTranscriber = transcriber
-    report(42, `기기에서 ${language === 'english' ? '영어' : '한국어'} 음성을 분석하고 있습니다.`)
+    report(42, `기기에서 ${SPEECH_LANGUAGES.find(item => item.speech === language)?.label ?? '선택한 언어'} 음성을 분석하고 있습니다.`)
     for (const [pieceIndex, window] of windows.entries()) {
       const inferenceCount = inferenceCounts[pieceIndex]
       const progressMessage = `기기에서 음성을 분석하고 있습니다. 음성 조각 ${pieceIndex + 1}/${windows.length}`

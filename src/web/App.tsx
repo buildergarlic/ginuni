@@ -21,6 +21,8 @@ import logo from '../renderer/src/assets/branding/ginuni-logo.png'
 import icon from '../renderer/src/assets/branding/ginuni-icon.png'
 import { SAMPLE_MEDIA } from './sample-media'
 import sampleTranscript from './sample-transcript.json'
+import { applyTranslations, displayRows, mergeDisplayedRows, restoreTranslationDraft } from './translation-project'
+import { translationLanguageForSpeech } from './languages'
 
 const messageOf = (error: unknown) =>
   error instanceof Error
@@ -37,6 +39,7 @@ export default function App() {
   const [mediaUrl, setMediaUrl] = useState('')
   const [mediaLoading, setMediaLoading] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [busyOperation, setBusyOperation] = useState<'transcription' | 'translation'>('transcription')
   const [progress, setProgress] = useState({ percent: 0, message: '' })
   const [help, setHelp] = useState(false)
   const history = useRef<Array<{ project: WebProject; file: File | null }>>([])
@@ -110,7 +113,7 @@ export default function App() {
     setProject({ ...next, updatedAt: new Date().toISOString() })
   }
   function rowsChanged(rows: ScriptRow[]) {
-    if (project) update({ ...project, rows })
+    if (project) update({ ...project, rows: mergeDisplayedRows(project, rows) })
   }
   function replaceRows(
     rows: ScriptRow[],
@@ -129,6 +132,7 @@ export default function App() {
       ...project,
       source,
       rows,
+      dialogueLanguage: 'original',
       durationMs: durationMs ?? project.durationMs
     })
     return true
@@ -262,6 +266,7 @@ export default function App() {
     const controller = new AbortController()
     const analysisSelection = mediaSelection.current
     cancellation.current = controller
+    setBusyOperation('transcription')
     setBusy(true)
     setError('')
     setNotice('')
@@ -305,6 +310,8 @@ export default function App() {
       update({
         ...project,
         source: 'transcription',
+        dialogueLanguage: 'original',
+        translationSourceLanguage: translationLanguageForSpeech(publicSample ? 'english' : project.transcriptionLanguage),
         rows: addDescriptionCandidates(rows, result.durationMs),
         durationMs: result.durationMs
       })
@@ -320,25 +327,62 @@ export default function App() {
       cancellation.current = null
     }
   }
+  async function translate() {
+    if (!project || busy || cancellation.current || mediaSelection.current.pending) return
+    const inputs = project.rows.filter(row => row.kind === 'dialogue' && row.content.trim())
+      .map(row => ({ rowId: row.id, sourceContent: row.content }))
+    if (!inputs.length) { setError('먼저 외국어 대사를 입력하거나 음성을 분석해 주세요.'); return }
+    if (project.rows.some(row => row.translation && row.translation.content !== row.translation.draft) &&
+      !window.confirm('수정한 한국어 번역을 새 AI 초안으로 바꿉니다. 원문과 시간은 보존됩니다. 다시 번역할까요?')) return
+    const controller = new AbortController()
+    const selection = mediaSelection.current
+    cancellation.current = controller
+    setBusyOperation('translation')
+    setBusy(true)
+    setError('')
+    setNotice('')
+    setProgress({ percent: 0, message: '한국어 번역을 준비합니다.' })
+    try {
+      const { translateDialogue } = await import('./translation')
+      const sourceLanguage = project.translationSourceLanguage ?? translationLanguageForSpeech(project.transcriptionLanguage) ?? 'en'
+      const results = await translateDialogue(inputs, { sourceLanguage, signal: controller.signal, onProgress: setProgress })
+      if (controller.signal.aborted) return
+      if (currentProject.current !== project || mediaSelection.current !== selection)
+        throw new Error('번역 중 작업이 변경되어 결과를 적용하지 않았습니다. 현재 대본은 유지됩니다.')
+      update({ ...applyTranslations(project, results), translationSourceLanguage: sourceLanguage })
+      setNotice(`한국어 번역 초안 ${results.length}행을 만들었습니다. 원문과 시간은 보존했습니다. 번역 내용을 검수해 주세요.`)
+    } catch (error) {
+      if (controller.signal.aborted) setNotice('번역을 취소했습니다. 기존 원문과 번역은 유지됩니다.')
+      else setError(messageOf(error))
+    } finally {
+      setBusy(false)
+      cancellation.current = null
+    }
+  }
   async function exportProject(format: 'hwpx' | 'srt' | 'json') {
     if (!project) return
     setError('')
     try {
+      const rows = displayRows(project)
       if (format !== 'json') {
-        if (!project.rows.length) throw new Error('먼저 대본을 작성해 주세요.')
-        const issues = validateRows(project.rows)
+        if (!rows.length) throw new Error('먼저 대본을 작성해 주세요.')
+        if (project.dialogueLanguage === 'korean' && project.rows.some(row => row.kind === 'dialogue' &&
+          ((row.translation && row.translation.sourceContent !== row.content) ||
+            (row.content.trim() && !row.translation?.content.trim()))))
+          throw new Error('미번역 대사나 원문이 바뀐 번역이 있습니다. 다시 번역하거나 원문 보기로 전환한 뒤 내보내 주세요.')
+        const issues = validateRows(rows)
         if (issues.length)
           throw new Error(
             `내보내기 전에 확인해 주세요: ${issues.slice(0, 3).join(' ')}`
           )
         if (
           format === 'srt' &&
-          !project.rows.some((row) => row.kind === 'dialogue')
+          !rows.some((row) => row.kind === 'dialogue')
         )
           throw new Error(
             'SRT로 저장할 대사 행이 없습니다. 해설을 포함한 대본은 HWPX로 저장해 주세요.'
           )
-        const pending = project.rows.filter((row) => !row.reviewed).length
+        const pending = rows.filter((row) => !row.reviewed).length
         if (
           pending &&
           !window.confirm(
@@ -349,11 +393,11 @@ export default function App() {
       }
       const blob =
         format === 'hwpx'
-          ? await createHwpxBlob(project.title, project.rows)
+          ? await createHwpxBlob(project.title, rows)
           : new Blob(
               [
                 format === 'srt'
-                  ? buildSrtContent(project.rows, true)
+                  ? buildSrtContent(rows, true)
                   : serializeProject(project)
               ],
               {
@@ -363,7 +407,7 @@ export default function App() {
                     : 'application/json'
               }
             )
-      downloadBlob(blob, `${safeFileName(project.title)}.${format}`)
+      downloadBlob(blob, `${safeFileName(project.title)}${format !== 'json' && project.dialogueLanguage === 'korean' ? '_한국어' : ''}.${format}`)
       setNotice(
         `${format.toUpperCase()} 파일을 저장했습니다.${format === 'srt' ? ' SRT에는 대사 행만 포함됩니다.' : ''}`
       )
@@ -451,6 +495,12 @@ export default function App() {
                 있습니다.
               </p>
               <p>
+                외국어 대사는 ‘한국어로 번역’으로 원문과 시간을 보존한 한국어
+                초안을 만들 수 있습니다. 원문·한국어 보기에서 선택한 언어가 영상
+                자막과 SRT·HWPX에 반영됩니다. 번역 모델은 첫 사용 시 약 640MB를
+                내려받으며, 번역 내용을 직접 검수해 주세요.
+              </p>
+              <p>
                 대본은 현재 브라우저에 최대 10개 저장됩니다. 브라우저 데이터
                 삭제 시 사라지므로 JSON 백업을 보관하세요. 영상은 저장하지
                 않으며 새로고침 후 다시 선택합니다. 영상·대본은 서버로 전송하지
@@ -490,6 +540,7 @@ export default function App() {
             file={file}
             mediaUrl={mediaUrl}
             busy={busy}
+            busyOperation={busyOperation}
             mediaLoading={mediaLoading}
             progress={progress}
             saveError={saveError}
@@ -499,6 +550,12 @@ export default function App() {
             onMedia={attachMedia}
             onSubtitle={importSrt}
             onAnalyze={analyze}
+            onTranslate={translate}
+            onRestoreTranslation={rowId => {
+              if (busy) return
+              update(restoreTranslationDraft(project, rowId))
+              setNotice('처음 생성한 번역 초안으로 복원했습니다. 원문은 그대로입니다.')
+            }}
             onCancel={() => cancellation.current?.abort()}
             onExport={exportProject}
             onUndo={() => {

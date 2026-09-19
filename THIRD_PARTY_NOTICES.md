@@ -29,7 +29,9 @@ GiNuNi 자체 소스 코드에는 GNU Affero General Public License v3.0 (AGPL-3
 - **fflate 0.8.3** — Copyright (c) 2026 Arjun Barrett, MIT License. 브라우저에서 HWPX ZIP 파일을 생성합니다. 설치 패키지의 `LICENSE`와 `package.json`에서 확인했습니다. [프로젝트](https://github.com/101arrowz/fflate) · [라이선스 전문](https://github.com/101arrowz/fflate/blob/v0.8.3/LICENSE).
 - **MediaBunny / mediabunny 1.58.1** — Vanilagy, Mozilla Public License 2.0 (`MPL-2.0`). 브라우저에서 미디어 파일의 일부 구간을 읽고 오디오를 해독하는 데 사용합니다. 설치 패키지의 `LICENSE`와 `package.json`에서 확인했으며 라이브러리 원본 소스를 수정하지 않고 웹 빌드에 포함합니다. [해당 버전 소스](https://github.com/Vanilagy/mediabunny/tree/v1.58.1/src) · [라이선스 전문](https://github.com/Vanilagy/mediabunny/blob/v1.58.1/LICENSE).
 
-모델은 Hugging Face 및 관련 CDN에서, WASM 런타임은 jsDelivr에서 가져오며 각 배포처의 고지도 적용됩니다. 라이브러리의 개발 의존성 분류는 웹 결과물 재배포 시 라이선스·저작권 고지를 보존할 의무를 없애지 않습니다.
+- **M2M100 / Xenova/m2m100_418M** — 외국어 대사를 한국어로 번역하는 다국어 모델입니다. ONNX 변환본의 고정 리비전은 `9c374f0b7aca709787cea97b047bfbbd1559d177`입니다. 원본 모델은 Facebook의 **MIT License**이며 Copyright (c) Facebook, Inc. and its affiliates. 고지를 보존합니다. [원본 모델과 MIT 표기](https://huggingface.co/facebook/m2m100_418M) · [고정 ONNX 변환본](https://huggingface.co/Xenova/m2m100_418M/tree/9c374f0b7aca709787cea97b047bfbbd1559d177) · [원본 라이선스](https://github.com/facebookresearch/fairseq/blob/main/LICENSE). 전문은 `resources/licenses/m2m100-MIT.txt` 및 웹 `licenses.txt`에 포함됩니다.
+
+모델은 Hugging Face 및 관련 CDN에서, WASM 런타임은 jsDelivr에서 가져오며 각 배포처의 고지도 적용됩니다. 음성 인식과 번역은 사용자 기기에서 실행합니다. 라이브러리의 개발 의존성 분류는 웹 결과물 재배포 시 라이선스·저작권 고지를 보존할 의무를 없애지 않습니다.
 
 ## 웹 체험 영상
 

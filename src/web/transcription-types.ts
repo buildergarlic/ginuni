@@ -1,4 +1,5 @@
 import type { TranscriptSegment } from '../shared/types'
+import type { SpeechLanguage } from './languages'
 
 export const MAX_MEDIA_DURATION_MS = 3 * 60 * 60 * 1000
 export const FALLBACK_MAX_MEDIA_BYTES = 100 * 1024 * 1024
@@ -14,7 +15,7 @@ export const TRANSCRIPTION_MODEL_REVISION =
 export const TRANSCRIPTION_ENGLISH_MODEL = 'Xenova/whisper-base.en'
 export const TRANSCRIPTION_ENGLISH_MODEL_REVISION = '95bf40a508535962c6483ead40270b2e32267508'
 
-export type TranscriptionLanguage = 'korean' | 'english'
+export type TranscriptionLanguage = SpeechLanguage
 
 export interface TranscriptionProgress {
   percent: number
