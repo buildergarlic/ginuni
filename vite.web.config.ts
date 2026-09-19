@@ -21,6 +21,8 @@ export default defineConfig({
           'node_modules/@xmldom/xmldom/LICENSE',
           'node_modules/fflate/LICENSE',
           'node_modules/@huggingface/transformers/LICENSE',
+          'node_modules/mediabunny/LICENSE',
+          'docs/SAMPLE_MEDIA.md',
           'resources/licenses/onnxruntime-MIT.txt',
           'resources/licenses/whisper-MIT.txt'
         ]

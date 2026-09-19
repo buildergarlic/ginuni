@@ -16,10 +16,10 @@ import {
   type WebProject
 } from './project'
 import { createHwpxBlob, downloadBlob, safeFileName } from './export'
-import { transcribeFile } from './transcription'
 import Workspace from './Workspace'
 import logo from '../renderer/src/assets/branding/ginuni-logo.png'
 import icon from '../renderer/src/assets/branding/ginuni-icon.png'
+import { SAMPLE_MEDIA, SAMPLE_DESCRIPTION_ROWS } from './sample-media'
 
 const messageOf = (error: unknown) =>
   error instanceof Error
@@ -34,12 +34,16 @@ export default function App() {
   const [saveError, setSaveError] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [mediaUrl, setMediaUrl] = useState('')
+  const [mediaLoading, setMediaLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState({ percent: 0, message: '' })
   const [help, setHelp] = useState(false)
   const history = useRef<Array<{ project: WebProject; file: File | null }>>([])
   const currentProject = useRef(project)
   currentProject.current = project
+  const currentFile = useRef(file)
+  currentFile.current = file
+  const mediaSelection = useRef({ id: 0, pending: false })
   const cancellation = useRef<AbortController | null>(null)
   const backupInput = useRef<HTMLInputElement>(null)
 
@@ -90,6 +94,8 @@ export default function App() {
     )
       return
     history.current = []
+    mediaSelection.current = { id: mediaSelection.current.id + 1, pending: false }
+    setMediaLoading(false)
     setFile(null)
     setProject(next)
     setError('')
@@ -126,7 +132,10 @@ export default function App() {
     return true
   }
   async function attachMedia(selected: File) {
-    if (!project) return
+    if (!project || busy || cancellation.current) return
+    const selection = { id: mediaSelection.current.id + 1, pending: true }
+    mediaSelection.current = selection
+    setMediaLoading(true)
     setError('')
     const url = URL.createObjectURL(selected)
     const media = document.createElement('video')
@@ -156,6 +165,11 @@ export default function App() {
         media.preload = 'metadata'
         media.src = url
       })
+      if (
+        mediaSelection.current !== selection ||
+        currentProject.current?.id !== project.id
+      )
+        return
       if (currentProject.current !== project)
         throw new Error(
           '파일을 읽는 동안 작업이 변경되었습니다. 변경한 대본을 보존했습니다. 파일을 다시 선택해 주세요.'
@@ -175,15 +189,26 @@ export default function App() {
         ...project,
         mediaName: selected.name,
         durationMs: duration,
-        sample: false
+        sample: false,
+        sampleId: undefined
       })
       setNotice('파일을 연결했습니다. 영상·음성은 이 기기에서만 처리됩니다.')
     } catch (e) {
-      setError(messageOf(e))
+      if (
+        mediaSelection.current === selection &&
+        currentProject.current?.id === project.id
+      )
+        setError(messageOf(e))
     } finally {
+      media.onloadedmetadata = null
+      media.onerror = null
       media.removeAttribute('src')
       media.load()
       URL.revokeObjectURL(url)
+      if (mediaSelection.current === selection) {
+        selection.pending = false
+        setMediaLoading(false)
+      }
     }
   }
   async function importSrt(selected: File, offsetMs: number) {
@@ -219,7 +244,11 @@ export default function App() {
     }
   }
   async function analyze() {
-    if (!file || !project || busy) return
+    if (
+      !file || !project || busy || cancellation.current ||
+      mediaSelection.current.pending
+    )
+      return
     if (
       project.rows.length &&
       !window.confirm(
@@ -228,17 +257,27 @@ export default function App() {
     )
       return
     const controller = new AbortController()
+    const analysisSelection = mediaSelection.current
     cancellation.current = controller
     setBusy(true)
     setError('')
     setNotice('')
     setProgress({ percent: 0, message: '음성 분석을 준비합니다.' })
     try {
+      const { transcribeFile } = await import('./transcription')
       const result = await transcribeFile(file, {
         signal: controller.signal,
         onProgress: setProgress
       })
       if (controller.signal.aborted) return
+      if (
+        currentProject.current !== project ||
+        currentFile.current !== file ||
+        mediaSelection.current !== analysisSelection
+      )
+        throw new Error(
+          '분석 중 영상이나 작업이 변경되어 이전 분석 결과를 적용하지 않았습니다. 현재 대본은 유지됩니다.'
+        )
       const rows: ScriptRow[] = result.segments.map((segment) => ({
         id: crypto.randomUUID(),
         kind: 'dialogue',
@@ -395,9 +434,11 @@ export default function App() {
                 자동으로 묘사하거나 화자를 자동 분리하지 않습니다.
               </p>
               <p>
-                AI 분석: 최대 5분·100MB, 최초 모델 다운로드 필요. Chrome·Edge
-                최신 버전을 권장하며 기기 성능에 따라 수 분 걸릴 수 있습니다. 긴
-                영상은 SRT로 시작하세요.
+                AI 분석: 최대 3시간의 영상을 약 1분씩 자동으로 나누어 순서대로
+                처리합니다. 100MB를 넘는 파일도 필요한 음성 구간만 읽어
+                분석합니다. 최초 모델 다운로드가 필요하며 Chrome·Edge 최신
+                버전을 권장합니다. 긴 영상은 기기 성능에 따라 오래 걸릴 수
+                있습니다.
               </p>
               <p>
                 대본은 현재 브라우저에 최대 10개 저장됩니다. 브라우저 데이터
@@ -439,6 +480,7 @@ export default function App() {
             file={file}
             mediaUrl={mediaUrl}
             busy={busy}
+            mediaLoading={mediaLoading}
             progress={progress}
             saveError={saveError}
             onBack={() => open(null)}
@@ -495,40 +537,40 @@ export default function App() {
               </div>
               <div
                 className="hero-preview"
-                aria-label="대사 사이에 화면해설을 작성하는 예시"
+                aria-label="실제 퍼블릭도메인 영상의 화면해설 작업 예시"
               >
                 <div className="preview-top">
                   <span className="window-dots">● ● ●</span>
                   <span>GiNuNi Atelier</span>
                   <span>✦</span>
                 </div>
-                <div className="preview-landscape">
-                  <div className="sun" />
-                  <div className="hill hill-back" />
-                  <div className="hill" />
-                  <div className="trail" />
-                  <span className="landscape-caption">
-                    모든 장면에는
-                    <br />
-                    전하고 싶은 이야기가 있어요.
-                  </span>
-                </div>
+                <button
+                  className="preview-film"
+                  onClick={() => open(createSampleProject())}
+                  aria-label="실제 샘플 영상 열기"
+                >
+                  <img
+                    src={SAMPLE_MEDIA.poster}
+                    alt="1906년 샌프란시스코 마켓 스트리트의 실제 기록영상 한 장면"
+                  />
+                  <span>▶ 실제 영상으로 체험하기</span>
+                </button>
                 <div className="preview-line">
-                  <span>00:04</span>
-                  <b>대사</b>
-                  <p>벤치까지 천천히 같이 걸을까?</p>
-                  <span>✓</span>
+                  <span>1906</span>
+                  <b>기록영상</b>
+                  <p>샌프란시스코의 마켓 스트리트</p>
                 </div>
                 <div className="preview-line description">
-                  <span>00:09</span>
+                  <span>00:00</span>
                   <b>해설</b>
                   <p>
-                    초록빛 산책로를 따라 두 사람이 걷는다.
+                    {SAMPLE_DESCRIPTION_ROWS[0].content}
                     <i />
                   </p>
                 </div>
                 <div className="preview-bottom">
-                  <span className="dot" /> 당신의 문장으로 채워지는 대본
+                  <span className="dot" /> 퍼블릭도메인 · 원본 기록영상 60초
+                  발췌
                 </div>
               </div>
             </section>

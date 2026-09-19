@@ -72,10 +72,39 @@ try {
   await page
     .getByRole('button', { name: '샘플로 바로 체험하기', exact: false })
     .click()
-  assert.equal(await page.locator('.script-row').count(), 9)
+  assert.equal(await page.locator('.script-row').count(), 6)
+  assert.equal(await page.locator('.sample-scene, .walkers').count(), 0)
+  await page.waitForFunction(
+    () => document.querySelector('video')?.readyState >= 2
+  )
+  assert.equal(
+    Math.round(await page.locator('video').evaluate((video) => video.duration)),
+    60
+  )
+  assert.ok(
+    (await page.locator('video').getAttribute('src')).includes(
+      'sample-market-street-1906'
+    )
+  )
+  assert.equal(
+    await page
+      .getByRole('link', { name: '원본 영상·퍼블릭도메인 출처 확인 ↗' })
+      .getAttribute('href'),
+    'https://archive.org/details/ATripDownMarketStreet_HD'
+  )
+  await page.getByRole('button', { name: '영상 재생', exact: true }).click()
+  await page.waitForFunction(
+    () => document.querySelector('video').currentTime > 0.2
+  )
+  await page
+    .getByRole('button', { name: '영상 일시 정지', exact: true })
+    .click()
+  record(
+    'Bundled public-domain film loads and actually plays, with its source visible.'
+  )
   await page
     .getByRole('textbox', { name: '화면해설 내용', exact: true })
-    .fill('초록빛 산책로를 따라 두 사람이 함께 걷는다.')
+    .fill('철로를 따라 마차와 자동차가 오가는 실제 거리 모습.')
   await page.getByRole('button', { name: '해설', exact: true }).click()
   await page.getByRole('button', { name: '확인 완료 · 다음 →' }).click()
   assert.equal(await page.locator('.script-row.selected.gap').count(), 1)
@@ -94,15 +123,20 @@ try {
   const hwpx = unzipSync(
     new Uint8Array(await readFile(await download('HWPX 한글 대본', '.hwpx')))
   )
-  assert.ok(strFromU8(hwpx['Contents/section0.xml']).includes('초록빛 산책로'))
+  assert.ok(
+    strFromU8(hwpx['Contents/section0.xml']).includes('철로를 따라 마차')
+  )
   assert.equal(strFromU8(hwpx.mimetype), 'application/hwp+zip')
-  const srt = await readFile(await download('SRT 자막', '.srt'), 'utf8')
-  assert.ok(srt.includes('00:00:04,000 --> 00:00:08,500'))
-  assert.ok(!srt.includes('초록빛 산책로'))
+  await page.getByRole('button', { name: 'SRT 자막' }).click()
+  await page
+    .getByRole('alert')
+    .filter({ hasText: 'SRT로 저장할 대사 행이 없습니다' })
+    .waitFor()
+  record('Silent-film sample contains no invented dialogue or SRT transcript.')
   const backupPath = await download('JSON 작업 백업', '.json')
   const backup = JSON.parse(await readFile(backupPath, 'utf8'))
   assert.equal(backup.rows[0].reviewed, true)
-  record('Real HWPX, dialogue-only SRT, and canonical JSON downloads pass.')
+  record('Actual-film HWPX and canonical JSON downloads pass.')
   await page.screenshot({
     path: resolve(output, 'web-workspace-desktop.png'),
     fullPage: true
@@ -110,7 +144,7 @@ try {
   await page.reload({ waitUntil: 'networkidle' })
   await page
     .locator('.project-open')
-    .filter({ hasText: '공원에서 함께' })
+    .filter({ hasText: '1906년 샌프란시스코' })
     .click()
   assert.equal(
     await page
@@ -137,13 +171,11 @@ try {
       name: '선택할 영상·음성·자막을 사용할 권리가 있습니다.'
     })
     .check()
-  await page
-    .getByLabel('영상·음성 파일', { exact: true })
-    .setInputFiles({
-      name: 'twelve.wav',
-      mimeType: 'audio/wav',
-      buffer: silentWav(12)
-    })
+  await page.getByLabel('영상·음성 파일', { exact: true }).setInputFiles({
+    name: 'twelve.wav',
+    mimeType: 'audio/wav',
+    buffer: silentWav(12)
+  })
   await page
     .getByRole('status')
     .filter({ hasText: '파일을 연결했습니다' })
@@ -153,13 +185,81 @@ try {
       (await page.locator('video').evaluate((video) => video.duration)) - 12
     ) < 0.1
   )
-  await page
-    .getByLabel('영상·음성 파일', { exact: true })
-    .setInputFiles({
-      name: 'fifteen.wav',
-      mimeType: 'audio/wav',
-      buffer: silentWav(15)
+  // Delay only metadata probes detached from the document. The real player and
+  // decoder still load actual WAVs; no model or application method is mocked.
+  await page.evaluate(() => {
+    const originalCreate = document.createElement.bind(document)
+    const held = []
+    document.createElement = function (name, options) {
+      const element = originalCreate(name, options)
+      if (name.toLowerCase() === 'video') {
+        element.addEventListener('loadedmetadata', event => {
+          if (!element.isConnected) {
+            event.stopImmediatePropagation()
+            held.push(element)
+          }
+        }, true)
+      }
+      return element
+    }
+    window.__metadataGate = {
+      held,
+      release(index, fail = false) {
+        const element = held[index]
+        const handler = fail ? element.onerror : element.onloadedmetadata
+        handler?.call(element, new Event(fail ? 'error' : 'loadedmetadata'))
+      },
+      restore() { document.createElement = originalCreate }
+    }
+  })
+  const chooseDelayedMedia = async name => {
+    await page.getByLabel('영상·음성 파일', { exact: true }).setInputFiles({
+      name, mimeType: 'audio/wav', buffer: silentWav(15)
     })
+  }
+  const analyzeButton = page.getByRole('button', { name: 'AI로 대사 만들기', exact: true })
+  await chooseDelayedMedia('delayed-first.wav')
+  await page.waitForFunction(() => window.__metadataGate.held.length === 1)
+  assert.equal(await analyzeButton.isDisabled(), true, 'AI must not analyze the old file during a pending media replacement.')
+  await analyzeButton.evaluate(button => button.click())
+  assert.equal(await page.locator('.analysis-progress').count(), 0)
+  await chooseDelayedMedia('delayed-latest.wav')
+  await page.waitForFunction(() => window.__metadataGate.held.length === 2)
+  await page.evaluate(async () => {
+    window.__metadataGate.release(0)
+    await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+  })
+  assert.equal(await analyzeButton.isDisabled(), true, 'An older metadata result must not unlock analysis while the latest selection is pending.')
+  assert.ok((await page.locator('.file-name').innerText()).includes('twelve.wav'))
+  await page.evaluate(() => window.__metadataGate.release(1))
+  await page.locator('.file-name').filter({ hasText: 'delayed-latest.wav' }).waitFor()
+  assert.equal(await analyzeButton.isEnabled(), true)
+  await chooseDelayedMedia('stale-failure.wav')
+  await page.waitForFunction(() => window.__metadataGate.held.length === 3)
+  await chooseDelayedMedia('latest-success.wav')
+  await page.waitForFunction(() => window.__metadataGate.held.length === 4)
+  await page.evaluate(() => window.__metadataGate.release(3))
+  await page.locator('.file-name').filter({ hasText: 'latest-success.wav' }).waitFor()
+  await page.evaluate(async () => {
+    window.__metadataGate.release(2, true)
+    await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+    window.__metadataGate.restore()
+  })
+  assert.equal(await page.getByRole('alert').count(), 0, 'A stale metadata failure must not replace the current successful selection with an error.')
+  assert.equal(await analyzeButton.isEnabled(), true)
+  assert.ok((await page.locator('.file-name').innerText()).includes('latest-success.wav'))
+  record('Pending media blocks old-file AI analysis; latest selection wins and stale metadata failures stay quiet.')
+  await page.getByLabel('영상·음성 파일', { exact: true }).setInputFiles({
+    name: 'twelve.wav', mimeType: 'audio/wav', buffer: silentWav(12)
+  })
+  await page.locator('.file-name').filter({ hasText: 'twelve.wav' }).waitFor()
+  await page.getByLabel('영상·음성 파일', { exact: true }).setInputFiles({
+    name: 'fifteen.wav',
+    mimeType: 'audio/wav',
+    buffer: silentWav(15)
+  })
   await page.locator('.file-name').filter({ hasText: 'fifteen.wav' }).waitFor()
   await page.getByRole('button', { name: '↶ 되돌리기', exact: true }).click()
   await page.locator('.file-name').filter({ hasText: 'twelve.wav' }).waitFor()
@@ -169,27 +269,28 @@ try {
   record(
     'Changing media and undo restore both project metadata and actual playable file.'
   )
-  await page
-    .getByLabel('SRT 자막 파일', { exact: true })
-    .setInputFiles({
-      name: 'test.srt',
-      mimeType: 'text/plain',
-      buffer: Buffer.from(
-        '1\n00:00:02,000 --> 00:00:04,000\n테스트 대사입니다.\n\n2\n00:00:08,000 --> 00:00:10,000\n두 번째 대사입니다.'
-      )
-    })
+  await page.getByLabel('SRT 자막 파일', { exact: true }).setInputFiles({
+    name: 'test.srt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from(
+      '1\n00:00:02,000 --> 00:00:04,000\n테스트 대사입니다.\n\n2\n00:00:08,000 --> 00:00:10,000\n두 번째 대사입니다.'
+    )
+  })
   await page
     .getByRole('status')
     .filter({ hasText: '자막을 가져왔습니다' })
     .waitFor()
+  const srt = await readFile(await download('SRT 자막', '.srt'), 'utf8')
+  assert.ok(srt.includes('00:00:02,000 --> 00:00:04,000'))
+  assert.ok(srt.includes('테스트 대사입니다.'))
+  assert.ok(!srt.includes('해설 후보'))
+  record('Imported dialogue exports as SRT without description candidates.')
   const rowCount = await page.locator('.script-row').count()
-  await page
-    .getByLabel('SRT 자막 파일', { exact: true })
-    .setInputFiles({
-      name: 'broken.srt',
-      mimeType: 'text/plain',
-      buffer: Buffer.from('incorrect')
-    })
+  await page.getByLabel('SRT 자막 파일', { exact: true }).setInputFiles({
+    name: 'broken.srt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('incorrect')
+  })
   await page.getByRole('alert').waitFor()
   assert.equal(await page.locator('.script-row').count(), rowCount)
   record(

@@ -4,12 +4,14 @@ import { formatTimecode, parseTimecode } from '../shared/timecode'
 import { addDescriptionCandidates } from '../shared/description-candidates'
 import { validateRows } from '../shared/rows'
 import type { WebProject } from './project'
+import { SAMPLE_MEDIA } from './sample-media'
 
 interface Props {
   project: WebProject
   file: File | null
   mediaUrl: string
   busy: boolean
+  mediaLoading: boolean
   progress: { percent: number; message: string }
   saveError: string
   canUndo: boolean
@@ -26,6 +28,9 @@ interface Props {
 
 export default function Workspace(props: Props) {
   const { project, busy } = props
+  const publicSample =
+    project.sample === true && project.sampleId === SAMPLE_MEDIA.id
+  const mediaSource = props.mediaUrl || (publicSample ? SAMPLE_MEDIA.url : '')
   const [selected, setSelected] = useState(project.rows[0]?.id ?? '')
   const [time, setTime] = useState(0)
   const [playing, setPlaying] = useState(false)
@@ -55,27 +60,12 @@ export default function Workspace(props: Props) {
   useEffect(() => {
     setTime(0)
     setPlaying(false)
-  }, [props.mediaUrl])
-  useEffect(() => {
-    if (!playing || !project.sample || props.mediaUrl) return
-    const timer = window.setInterval(
-      () =>
-        setTime((value) => {
-          const next = value + 100
-          if (next >= project.durationMs) {
-            setPlaying(false)
-            return project.durationMs
-          }
-          return next
-        }),
-      100
-    )
-    return () => clearInterval(timer)
-  }, [playing, project.sample, project.durationMs, props.mediaUrl])
+  }, [mediaSource])
 
   function seek(ms: number) {
     setTime(ms)
-    if (video.current) video.current.currentTime = ms / 1000
+    if (video.current && video.current.readyState > 0)
+      video.current.currentTime = ms / 1000
   }
   function select(row: ScriptRow) {
     setSelected(row.id)
@@ -260,7 +250,7 @@ export default function Workspace(props: Props) {
               disabled={!rights || busy}
               onClick={() => mediaInput.current?.click()}
             >
-              영상·음성 선택
+              {props.mediaLoading ? '파일 확인 중 · 다른 파일 선택' : '영상·음성 선택'}
             </button>
             {project.mediaName && (
               <small className="file-name">
@@ -306,18 +296,17 @@ export default function Workspace(props: Props) {
           <div className="tool-option ai-option">
             <b>✦ 무료 AI 음성 분석</b>
             <p>
-              5분 · 100MB 이내 파일
-              <br />
-              최초 모델 다운로드 필요 · 기기에서 분석
+              긴 영상·큰 파일 자동 분할 · 최대 3시간
+              <br />약 1분씩 순차 분석 · 원본 시간으로 자동 합치기
             </p>
             <button
               className="primary"
-              disabled={!props.file || !rights || busy}
+              disabled={!props.file || !rights || busy || props.mediaLoading}
               onClick={() => void props.onAnalyze()}
             >
               AI로 대사 만들기
             </button>
-            <small>한국어 초안 · 정확도와 화자 검수 필요</small>
+            <small>첫 실행 시 모델 다운로드 · 한국어 초안 검수 필요</small>
           </div>
         </section>
       )}
@@ -326,8 +315,8 @@ export default function Workspace(props: Props) {
           <div>
             <strong>{props.progress.message}</strong>
             <p>
-              이 창을 열어 두세요. 첫 실행은 모델 다운로드와 준비에 시간이
-              걸립니다.
+              필요한 음성 구간만 차례로 읽어 분석합니다. 이 창을 열어 두세요. 첫
+              실행에는 모델 다운로드가 필요하고 긴 영상은 시간이 걸립니다.
             </p>
             <progress max="100" value={props.progress.percent} />
           </div>
@@ -348,81 +337,93 @@ export default function Workspace(props: Props) {
         <section className="media-pane" aria-label="영상 미리보기">
           <div className="pane-heading">
             <span>장면 보기</span>
-            <span>{project.sample ? '연습용 샘플' : '내 기기 영상'}</span>
+            <span>
+              {publicSample ? '퍼블릭도메인 기록영상' : '내 기기 영상'}
+            </span>
           </div>
-          {props.mediaUrl ? (
+          {mediaSource ? (
             <video
               ref={video}
-              className="video-player"
+              className={`video-player${publicSample ? ' public-domain' : ''}`}
               controls
               playsInline
               preload="metadata"
-              src={props.mediaUrl}
+              src={mediaSource}
+              poster={publicSample ? SAMPLE_MEDIA.poster : undefined}
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+              onEnded={() => setPlaying(false)}
+              onLoadedMetadata={(e) => {
+                e.currentTarget.currentTime = Math.min(
+                  time / 1000,
+                  e.currentTarget.duration
+                )
+              }}
               onTimeUpdate={(e) =>
                 setTime(Math.round(e.currentTarget.currentTime * 1000))
               }
               onError={() =>
                 setLocalError(
-                  '영상 재생 중 오류가 발생했습니다. 브라우저가 지원하는 MP4(H.264/AAC)로 변환해 주세요.'
+                  publicSample
+                    ? '샘플 영상을 불러오지 못했습니다. 인터넷 연결을 확인하고 다시 열어 주세요.'
+                    : '영상 재생 중 오류가 발생했습니다. 브라우저가 지원하는 MP4(H.264/AAC)로 변환해 주세요.'
                 )
               }
             />
-          ) : project.sample ? (
-            <div className="sample-scene">
-              <div className="sample-sky">
-                <div className="sun" />
-                <div className="hill hill-back" />
-                <div className="hill" />
-                <div className="sample-path" />
-                <div className="sample-tree one" />
-                <div className="sample-tree two" />
-                <div className="bench" />
-                <div
-                  className="walkers"
-                  style={{ left: `${20 + Math.min(time / 45000, 1) * 36}%` }}
-                >
-                  <span />
-                  <span />
-                </div>
-              </div>
-              <div className="sample-caption">
-                <span>직접 만든 연습용 장면 · 예시 대본</span>
-                <strong>
-                  {time < 14000
-                    ? '공원 입구, 함께 걷기 시작하는 두 사람'
-                    : time < 29000
-                      ? '산책로를 따라 벤치로 향하는 발걸음'
-                      : '나란히 앉아 잠깐의 바람을 느끼다'}
-                </strong>
-              </div>
-            </div>
           ) : (
             <div className="media-empty">
               <span className="media-empty-icon">▷</span>
               <h2>
-                {project.mediaName
-                  ? '영상을 다시 연결해 주세요'
-                  : '어떤 이야기를 들려줄까요?'}
+                {project.sample
+                  ? '이전 버전의 연습 대본'
+                  : project.mediaName
+                    ? '영상을 다시 연결해 주세요'
+                    : '어떤 이야기를 들려줄까요?'}
               </h2>
               <p>
-                {project.mediaName
-                  ? '대본은 저장되어 있습니다. 원본 영상은 이 기기에서 다시 선택하세요.'
-                  : '작업 도구에서 영상과 자막을 선택하거나 대사를 직접 입력해 보세요.'}
+                {project.sample
+                  ? '작성한 대본은 보존되어 있습니다. 실제 기록영상은 홈에서 새 샘플을 열어 확인하세요.'
+                  : project.mediaName
+                    ? '대본은 저장되어 있습니다. 원본 영상은 이 기기에서 다시 선택하세요.'
+                    : '작업 도구에서 영상과 자막을 선택하거나 대사를 직접 입력해 보세요.'}
               </p>
               <button className="secondary" onClick={() => setToolsOpen(true)}>
                 작업 도구 열기
               </button>
             </div>
           )}
+          {publicSample && (
+            <div className="sample-credit">
+              <strong>{SAMPLE_MEDIA.title}</strong>
+              <p>{SAMPLE_MEDIA.credit} · 원본 00:45–01:45 발췌</p>
+              <p>
+                실제 무성 기록영상입니다. 대사를 만들지 않았으며, 해설 예문을
+                직접 수정하며 작업할 수 있습니다.
+              </p>
+              <a href={SAMPLE_MEDIA.sourceUrl} target="_blank" rel="noreferrer">
+                원본 영상·퍼블릭도메인 출처 확인 ↗
+              </a>
+            </div>
+          )}
           <div className="timeline-control">
             <div>
               <button
                 className="play-button"
-                aria-label={playing ? '샘플 일시 정지' : '샘플 재생'}
-                disabled={!project.sample || !!props.mediaUrl}
-                onClick={() => {
-                  if (time >= project.durationMs) setTime(0)
-                  setPlaying(!playing)
+                aria-label={playing ? '영상 일시 정지' : '영상 재생'}
+                disabled={!mediaSource}
+                onClick={async () => {
+                  if (!video.current) return
+                  if (playing) video.current.pause()
+                  else {
+                    try {
+                      if (video.current.ended) video.current.currentTime = 0
+                      await video.current.play()
+                    } catch {
+                      setLocalError(
+                        '영상을 재생하지 못했습니다. 플레이어의 재생 버튼을 눌러 주세요.'
+                      )
+                    }
+                  }
                 }}
               >
                 {playing ? 'Ⅱ' : '▶'}
@@ -432,9 +433,7 @@ export default function Workspace(props: Props) {
                 {formatTimecode(project.durationMs)}
               </span>
               <span className="sample-only">
-                {project.sample
-                  ? '장면 카드 재생'
-                  : '행을 누르면 해당 시간으로 이동'}
+                행을 누르면 해당 시간으로 이동
               </span>
             </div>
             <input

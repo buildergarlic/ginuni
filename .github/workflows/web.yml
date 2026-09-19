@@ -8,6 +8,10 @@ on:
       - 'src/shared/**'
       - 'src/renderer/src/assets/branding/**'
       - 'resources/templates/**'
+      - 'LICENSE'
+      - 'NOTICE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'docs/SAMPLE_MEDIA.md'
       - 'package*.json'
       - 'vite.web.config.ts'
       - 'tests/**'
@@ -33,7 +37,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - name: Verify web workflows and shared document formats
-        run: npx vitest run tests/web-project.test.ts tests/web-export.test.ts tests/web-transcription.test.ts tests/hwpx.test.ts tests/srt.test.ts tests/subtitle-parser-review.test.ts tests/description-candidates.test.ts
+        run: npx vitest run tests/web- tests/hwpx.test.ts tests/srt.test.ts tests/subtitle-parser-review.test.ts tests/description-candidates.test.ts
       - run: npm run build:web
         env:
           GINUNI_WEB_BASE: /ginuni/

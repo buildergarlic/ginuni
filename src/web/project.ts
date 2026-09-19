@@ -6,6 +6,7 @@ import {
   validateSubtitleRows
 } from '../shared/subtitle-rows'
 import type { ScriptRow } from '../shared/types'
+import { SAMPLE_MEDIA, SAMPLE_DESCRIPTION_ROWS } from './sample-media'
 
 export const MAX_MEDIA_DURATION_MS = 3 * 60 * 60 * 1_000
 const MAX_ROWS = 20_000
@@ -22,6 +23,7 @@ export interface WebProject {
   rows: ScriptRow[]
   source: 'sample' | 'manual' | 'subtitle' | 'transcription'
   sample?: boolean
+  sampleId?: string
 }
 
 const identifierSchema = z.string().trim().min(1).max(200)
@@ -57,7 +59,8 @@ const projectSchema = z
     durationMs: timeSchema,
     rows: z.array(rowSchema).max(MAX_ROWS),
     source: z.enum(['sample', 'manual', 'subtitle', 'transcription']),
-    sample: z.boolean().optional()
+    sample: z.boolean().optional(),
+    sampleId: z.literal('market-street-1906').optional()
   })
   .superRefine((project, context) => {
     const ids = new Set<string>()
@@ -105,20 +108,14 @@ export function createProject(title = '새 화면해설 대본'): WebProject {
 }
 
 export function createSampleProject(): WebProject {
-  const sample = createProject('공원에서 함께 · 연습용 예시')
-  const dialogue: Array<[number, number, string, string]> = [
-    [4_000, 8_500, '지우', '민서야, 벤치까지 천천히 같이 걸을까?'],
-    [14_000, 18_500, '민서', '좋아. 오른쪽에서 물 흐르는 소리가 들려.'],
-    [25_000, 29_000, '지우', '앞에 빈 벤치가 있어. 네 걸음쯤 더 가면 돼.'],
-    [35_000, 39_500, '민서', '바람이 참 좋다. 여기서 잠깐 쉬자.']
-  ]
-  const rows: ScriptRow[] = dialogue.map(
-    ([startMs, endMs, speaker, content]) => ({
+  const sample = createProject(SAMPLE_MEDIA.title)
+  const rows: ScriptRow[] = SAMPLE_DESCRIPTION_ROWS.map(
+    ({ startMs, endMs, content }) => ({
       id: globalThis.crypto.randomUUID(),
-      kind: 'dialogue',
+      kind: 'descriptionGap',
       startMs,
       endMs,
-      speakers: [speaker],
+      speakers: [],
       content,
       sourceSegmentIds: [],
       reviewed: false,
@@ -127,10 +124,11 @@ export function createSampleProject(): WebProject {
   )
   return {
     ...sample,
-    durationMs: 45_000,
-    rows: addDescriptionCandidates(rows, 45_000),
+    durationMs: SAMPLE_MEDIA.durationMs,
+    rows,
     source: 'sample',
-    sample: true
+    sample: true,
+    sampleId: SAMPLE_MEDIA.id
   }
 }
 

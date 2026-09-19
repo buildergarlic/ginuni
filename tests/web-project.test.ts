@@ -45,15 +45,24 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('web project backups', () => {
-  it('creates distinct usable drafts and a sample with editable candidates inside its 45-second timeline', () => {
+  it('creates a real public-domain film sample with honest editable descriptions and no invented dialogue', () => {
     const draft = createProject()
     expect(draft.id).not.toBe(createProject().id)
     expect(parseProject(serializeProject(draft))).toMatchObject({ source: 'manual', durationMs: 60_000, rows: [] })
     const sample = parseProject(serializeProject(createSampleProject()))
-    expect(sample).toMatchObject({ source: 'sample', sample: true, durationMs: 45_000 })
-    expect(sample.rows.filter(item => item.kind === 'dialogue').length).toBeGreaterThan(0)
-    expect(sample.rows.some(item => item.subtitleGapCandidate && !item.reviewed)).toBe(true)
-    expect(sample.rows.at(-1)?.endMs).toBe(45_000)
+    expect(sample).toMatchObject({ source: 'sample', sample: true, sampleId: 'market-street-1906', durationMs: 60_000 })
+    expect(sample.rows.length).toBeGreaterThan(2)
+    expect(sample.rows.every(item => item.kind === 'descriptionGap' && !item.reviewed && item.content.trim())).toBe(true)
+    expect(sample.rows.every(item => item.sourceSegmentIds.length === 0 && item.speakers.length === 0)).toBe(true)
+    expect(sample.rows.at(-1)?.endMs).toBe(60_000)
+  })
+
+  it('preserves legacy sample drafts without assigning unrelated real footage', () => {
+    const oldSample = project({ source: 'sample', sample: true })
+    const restored = parseProject(serializeProject(oldSample))
+    expect(restored.rows).toEqual(oldSample.rows)
+    expect(restored.durationMs).toBe(45_000)
+    expect(restored.sampleId).toBeUndefined()
   })
 
   it('round trips Korean text and approved rows while stripping unknown project and row properties', () => {
@@ -75,7 +84,7 @@ describe('web project backups', () => {
     { rows: [row({ reviewed: 'yes' as unknown as boolean })] },
     { rows: [row({ endMs: Infinity })] },
     { rows: Array.from({ length: 20_001 }, (_, index) => row({ id: `row-${index}` })) }
-  ])('rejects invalid backups without touching saved work: %j', overrides => {
+  ])('rejects invalid backups without touching saved work (case %#)', overrides => {
     saveProject(project())
     const before = storage.getItem(STORAGE_KEY)
     expect(() => parseProject(JSON.stringify({ ...project(), ...overrides }))).toThrow()

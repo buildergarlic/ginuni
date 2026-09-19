@@ -1,7 +1,11 @@
 import type { TranscriptSegment } from '../shared/types'
 
-export const MAX_MEDIA_BYTES = 100 * 1024 * 1024
-export const MAX_MEDIA_DURATION_MS = 5 * 60 * 1000
+export const MAX_MEDIA_DURATION_MS = 3 * 60 * 60 * 1000
+export const FALLBACK_MAX_MEDIA_BYTES = 100 * 1024 * 1024
+export const FALLBACK_MAX_MEDIA_DURATION_MS = 5 * 60 * 1000
+export const TRANSCRIPTION_CHUNK_MS = 60_000
+export const TRANSCRIPTION_CONTEXT_MS = 2_000
+export const TRANSCRIPTION_MAX_CHUNK_MS = TRANSCRIPTION_CHUNK_MS + 2 * TRANSCRIPTION_CONTEXT_MS
 export const TRANSCRIPTION_SAMPLE_RATE = 16_000
 export const TRANSCRIPTION_MODEL = 'Xenova/whisper-tiny'
 // Pin the public model so a Hub update cannot silently change submitted results.
@@ -18,21 +22,19 @@ export interface BrowserTranscriptionResult {
   durationMs: number
 }
 
-export interface TranscriptionWorkerRequest {
-  audio: Float32Array
-  durationMs: number
-}
+export type TranscriptionWorkerRequest =
+  | { type: 'transcribe'; chunkId: number; audio: Float32Array; durationMs: number }
+  | { type: 'dispose' }
 
 export type TranscriptionWorkerResponse =
-  | { type: 'progress'; progress: TranscriptionProgress }
-  | { type: 'complete'; result: BrowserTranscriptionResult }
-  | { type: 'error'; message: string }
+  | { type: 'progress'; chunkId: number; progress: TranscriptionProgress }
+  | { type: 'chunk'; chunkId: number; segments: TranscriptSegment[] }
+  | { type: 'disposed' }
+  | { type: 'error'; chunkId?: number; message: string }
 
 export function validateMediaSize(size: number): void {
-  if (!Number.isFinite(size) || size <= 0)
+  if (!Number.isSafeInteger(size) || size <= 0)
     throw new Error('비어 있는 파일은 분석할 수 없습니다.')
-  if (size > MAX_MEDIA_BYTES)
-    throw new Error('웹 버전에서는 100MB 이하 파일을 선택해 주세요.')
 }
 
 export function validateMediaDuration(durationMs: number): void {
@@ -43,7 +45,7 @@ export function validateMediaDuration(durationMs: number): void {
   }
   if (durationMs > MAX_MEDIA_DURATION_MS) {
     throw new Error(
-      '웹 버전의 AI 분석은 최대 5분까지 지원합니다. 짧은 구간을 잘라서 선택해 주세요.'
+      '웹 작업실은 최대 3시간 길이의 영상을 지원합니다.'
     )
   }
 }
