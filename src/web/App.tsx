@@ -13,7 +13,8 @@ import {
   serializeProject,
   importSubtitle,
   MAX_MEDIA_DURATION_MS,
-  type WebProject
+  type WebProject,
+  type WebScriptRow
 } from './project'
 import { createHwpxBlob, downloadBlob, safeFileName } from './export'
 import Workspace from './Workspace'
@@ -23,6 +24,7 @@ import { SAMPLE_MEDIA } from './sample-media'
 import sampleTranscript from './sample-transcript.json'
 import { applyTranslations, displayRows, mergeDisplayedRows, restoreTranslationDraft } from './translation-project'
 import { translationLanguageForSpeech } from './languages'
+import { ASR_PROFILES } from './asr-models'
 
 const messageOf = (error: unknown) =>
   error instanceof Error
@@ -282,6 +284,7 @@ export default function App() {
       const result = await transcribeFile(analysisFile, {
         signal: controller.signal,
         language: publicSample ? 'english' : project.transcriptionLanguage ?? 'korean',
+        koreanAsrMode: project.koreanAsrMode ?? 'auto',
         onProgress: setProgress
       })
       if (controller.signal.aborted) return
@@ -293,7 +296,7 @@ export default function App() {
         throw new Error(
           '분석 중 영상이나 작업이 변경되어 이전 분석 결과를 적용하지 않았습니다. 현재 대본은 유지됩니다.'
         )
-      const rows: ScriptRow[] = result.segments.map((segment) => ({
+      const rows: WebScriptRow[] = result.segments.map((segment) => ({
         id: crypto.randomUUID(),
         kind: 'dialogue',
         startMs: segment.startMs,
@@ -301,7 +304,11 @@ export default function App() {
         content: segment.text,
         speakers: [],
         sourceSegmentIds: [segment.id],
-        reviewed: false
+        reviewed: false,
+        reviewStatus: segment.warningCodes?.length ? 'needsAttention' : 'unreviewed',
+        ...(segment.warningCodes?.length ? { asrWarnings: segment.warningCodes } : {}),
+        ...(segment.originalText ? { asrOriginalText: segment.originalText } : {}),
+        ...(segment.retryCount ? { asrRetryCount: segment.retryCount } : {})
       }))
       if (!rows.length)
         throw new Error(
@@ -312,12 +319,14 @@ export default function App() {
         source: 'transcription',
         dialogueLanguage: 'original',
         translationSourceLanguage: translationLanguageForSpeech(publicSample ? 'english' : project.transcriptionLanguage),
+        lastAsrProfile: result.profile,
         rows: addDescriptionCandidates(rows, result.durationMs),
         durationMs: result.durationMs
       })
-      setNotice(
-        'AI 초안을 만들었습니다. 인식 오류와 타임코드를 확인해 주세요. 화자는 자동으로 분리하지 않습니다.'
-      )
+      const flagged = rows.filter(row => row.asrWarnings?.length).length
+      setNotice(`${result.profile ? ASR_PROFILES[result.profile].label + ' · ' : ''}AI 초안을 만들었습니다. ` +
+        (flagged ? `반복·시간 확인이 필요한 대사 ${flagged}행을 표시했습니다. 원음을 듣고 확인해 주세요. ` : '인식 오류와 타임코드를 확인해 주세요. ') +
+        '화자는 자동으로 분리하지 않습니다.')
     } catch (e) {
       if (controller.signal.aborted)
         setNotice('음성 분석을 취소했습니다. 기존 대본은 유지됩니다.')
@@ -366,6 +375,8 @@ export default function App() {
       const rows = displayRows(project)
       if (format !== 'json') {
         if (!rows.length) throw new Error('먼저 대본을 작성해 주세요.')
+        if (project.rows.some(row => row.asrWarnings?.length && !row.reviewed))
+          throw new Error('음성 인식 확인이 필요한 대사가 있습니다. 표시된 행의 원음과 시간을 확인하고 확인 완료를 누른 뒤 내보내 주세요. JSON 백업은 계속 저장할 수 있습니다.')
         if (project.dialogueLanguage === 'korean' && project.rows.some(row => row.kind === 'dialogue' &&
           ((row.translation && row.translation.sourceContent !== row.content) ||
             (row.content.trim() && !row.translation?.content.trim()))))

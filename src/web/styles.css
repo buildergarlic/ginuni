@@ -67,7 +67,7 @@
 .comparison-summary span { color: var(--muted); font-size: 11px; }
 .row-play { margin-bottom: 12px; }
 .ai-option label { display: grid; gap: 5px; margin: 10px 0; font-size: 11px; }
-.ai-option select { padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: white; color: var(--ink); }
+.ai-option select { width: 100%; min-width: 0; max-width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: white; color: var(--ink); }
 
 :root {
   font-family: 'Noto Sans KR', 'Malgun Gothic', sans-serif;
@@ -1644,6 +1644,19 @@ nav {
 .translation-original { margin-top: 12px; padding: 12px; background: #f5f7f3; border-radius: 5px; font-size: 12px; line-height: 1.65; }
 .translation-original strong { color: var(--muted); font-size: 10px; }
 .translation-original p { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.asr-status { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 28px; background: #edf3ec; color: var(--muted); font-size: 12px; }
+.asr-model-note { display: block; line-height: 1.65; margin-top: 10px; }
+.asr-attention { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; padding: 18px 28px; background: #fff3db; color: #79591f; font-size: 12px; }
+.asr-attention span { flex: 1; min-width: 180px; line-height: 1.7; }
+.asr-flagged .row-main > p { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.asr-row-warning { margin-bottom: 12px; padding: 12px; border-radius: 6px; background: #fff3db; color: #79591f; font-size: 12px; line-height: 1.7; }
+.asr-row-warning details { margin-top: 10px; }
+.asr-row-warning p { max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 520px) {
+  .tools-panel { grid-template-columns: minmax(0, 1fr); }
+  .tool-option { border-left: 0; border-top: 1px solid #d5dfd0; padding: 16px 0 0; }
+  .asr-status { flex-wrap: wrap; padding: 12px 18px; }
+}
 @media (max-width: 680px) {
   .translation-panel { padding: 18px; }
   .translation-actions { width: 100%; gap: 10px; }

@@ -25,6 +25,7 @@ export default defineConfig({
           'docs/SAMPLE_MEDIA.md',
           'resources/licenses/onnxruntime-MIT.txt',
           'resources/licenses/whisper-MIT.txt',
+          'resources/licenses/silero-vad-MIT.txt',
           'resources/licenses/m2m100-MIT.txt'
         ]
         this.emitFile({

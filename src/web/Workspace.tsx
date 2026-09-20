@@ -10,6 +10,7 @@ import SampleComparison from './SampleComparison'
 import { displayRows } from './translation-project'
 import TranslationPanel from './TranslationPanel'
 import { SPEECH_LANGUAGES, translationLanguageForSpeech, type SpeechLanguage } from './languages'
+import { ASR_PROFILES, type KoreanAsrMode } from './asr-models'
 
 interface Props {
   project: WebProject
@@ -37,6 +38,7 @@ interface Props {
 export default function Workspace(props: Props) {
   const { project: originalProject, busy } = props
   const project = useMemo(() => ({ ...originalProject, rows: displayRows(originalProject) }), [originalProject])
+  const originalsById = useMemo(() => new Map(originalProject.rows.map(row => [row.id, row])), [originalProject.rows])
   const publicSample =
     project.sample === true && project.sampleId === SAMPLE_MEDIA.id
   const mediaSource = props.mediaUrl || (publicSample ? SAMPLE_MEDIA.url : '')
@@ -59,6 +61,7 @@ export default function Workspace(props: Props) {
   const srtInput = useRef<HTMLInputElement>(null)
   const selectedRow = project.rows.find((row) => row.id === selected)
   const approved = project.rows.filter((row) => row.reviewed).length
+  const asrAttention = originalProject.rows.filter(row => row.asrWarnings?.length && !row.reviewed)
   const visibleRows = project.rows.filter(
     (row) =>
       filter === 'all' ||
@@ -356,10 +359,19 @@ export default function Workspace(props: Props) {
             </p>
             <label>
               음성 언어
-              <select aria-label="음성 언어" value={publicSample ? 'english' : project.transcriptionLanguage ?? 'korean'} disabled={busy || publicSample} onChange={event => props.onChange({ ...originalProject, transcriptionLanguage: event.target.value as SpeechLanguage })}>
+              <select aria-label="음성 언어" value={publicSample ? 'english' : project.transcriptionLanguage ?? 'korean'} disabled={busy || props.mediaLoading || publicSample} onChange={event => props.onChange({ ...originalProject, transcriptionLanguage: event.target.value as SpeechLanguage })}>
                 {SPEECH_LANGUAGES.map(item => <option key={item.speech} value={item.speech}>{item.label}</option>)}
               </select>
             </label>
+            {!publicSample && (project.transcriptionLanguage ?? 'korean') === 'korean' && <label>
+              한국어 분석 품질
+              <select aria-label="한국어 분석 품질" value={project.koreanAsrMode ?? 'auto'} disabled={busy || props.mediaLoading}
+                onChange={event => props.onChange({ ...originalProject, koreanAsrMode: event.target.value as KoreanAsrMode })}>
+                <option value="auto">자동 · GPU 정밀 / CPU 호환</option>
+                <option value="precision">정밀 · large-v3-turbo · GPU 필요</option>
+                <option value="compatible">호환 · small · CPU</option>
+              </select>
+            </label>}
             <button
               className="primary"
               disabled={(!publicSample && (!props.file || !rights)) || busy || props.mediaLoading}
@@ -368,9 +380,23 @@ export default function Workspace(props: Props) {
               AI로 대사 만들기
             </button>
             <small>첫 실행 시 모델 다운로드 · 원어로 전사 · 초안 검수 필요</small>
+            {!publicSample && (project.transcriptionLanguage ?? 'korean') === 'korean' &&
+              <small className="asr-model-note">한국어 정밀 약 1.6GB / 호환 약 255MB. 발화 검출 후 분석하고 반복 의심 구간은 짧게 다시 듣습니다. 사투리·고유명사·겹친 대사는 검수가 필요합니다.</small>}
           </div>
         </section>
       )}
+      {project.lastAsrProfile && <div className="asr-status" aria-label="사용한 음성 인식 모델">
+        <span>{ASR_PROFILES[project.lastAsrProfile].label}</span>
+        <button className="quiet" disabled={busy} onClick={() => setToolsOpen(true)}>분석 설정 · 다시 분석</button>
+      </div>}
+      {asrAttention.length > 0 && <div className="asr-attention" role="status">
+        <strong>음성 인식 확인 필요 · {asrAttention.length}행</strong>
+        <span>반복하거나 잘렸을 수 있는 대사를 표시했습니다. 원음을 듣고 수정·확인한 뒤 내보내 주세요.</span>
+        <button className="secondary" disabled={busy} onClick={() => {
+          if (originalProject.dialogueLanguage === 'korean') props.onChange({ ...originalProject, dialogueLanguage: 'original' })
+          setFilter('pending'); select(asrAttention[0])
+        }}>첫 확인 필요 대사로</button>
+      </div>}
       <TranslationPanel project={originalProject} busy={busy || props.mediaLoading} onTranslate={props.onTranslate} onChange={props.onChange} onRestore={() => props.onRestoreTranslation()} />
       {busy && (
         <section className="analysis-progress" aria-live="polite">
@@ -609,7 +635,7 @@ export default function Workspace(props: Props) {
                 <article
                   id={`row-${row.id}`}
                   key={row.id}
-                  className={`script-row ${row.kind === 'descriptionGap' ? 'gap' : ''} ${row.id === selected ? 'selected' : ''} ${row.reviewed ? 'reviewed' : ''}`}
+                  className={`script-row ${row.kind === 'descriptionGap' ? 'gap' : ''} ${row.id === selected ? 'selected' : ''} ${row.reviewed ? 'reviewed' : ''} ${originalsById.get(row.id)?.asrWarnings?.length && !row.reviewed ? 'asr-flagged' : ''}`}
                 >
                   <button
                     className="row-select"
@@ -631,7 +657,7 @@ export default function Workspace(props: Props) {
                           {formatTimecode(row.endMs)}
                         </time>
                         <span className="row-review">
-                          {row.reviewed ? '✓ 확인 완료' : '확인 전'}
+                          {row.reviewed ? '✓ 확인 완료' : originalsById.get(row.id)?.asrWarnings?.length ? '⚠ 음성 확인 필요' : '확인 전'}
                         </span>
                       </div>
                       <p>
@@ -644,6 +670,14 @@ export default function Workspace(props: Props) {
                   </button>
                   {selectedRow?.id === row.id && (
                     <div className="row-editor">
+                      {originalsById.get(row.id)?.asrWarnings?.length &&
+                        <div className="asr-row-warning">
+                          반복 인식 또는 문장 잘림이 의심되는 구간입니다. 원음을 들으며 대사와 시작·종료 시간을 확인해 주세요.
+                          {originalsById.get(row.id)?.asrOriginalText && <details>
+                            <summary>재분석 전 인식 결과 보기</summary>
+                            <p>{originalsById.get(row.id)?.asrOriginalText}</p>
+                          </details>}
+                        </div>}
                       {mediaSource && <button className="secondary row-play" onClick={() => void playRange(row.startMs, row.endMs)} aria-label="선택한 대사 구간 재생">▶ 이 구간 듣기</button>}
                       <div className="time-fields">
                         <TimeField
@@ -717,8 +751,8 @@ export default function Workspace(props: Props) {
                       />
                       {project.dialogueLanguage === 'korean' && row.kind === 'dialogue' && <div className="translation-original">
                         <strong>원문</strong>
-                        <p>{originalProject.rows.find(item => item.id === row.id)?.content}</p>
-                        {originalProject.rows.find(item => item.id === row.id)?.translation?.draft.trim() &&
+                        <p>{originalsById.get(row.id)?.content}</p>
+                        {originalsById.get(row.id)?.translation?.draft.trim() &&
                           <button className="quiet" disabled={busy} onClick={() => props.onRestoreTranslation(row.id)}>이 대사 처음 번역으로 복원</button>}
                       </div>}
                       <div className="editor-actions">

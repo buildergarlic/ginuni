@@ -1,10 +1,9 @@
 import { ALL_FORMATS, HLS, AudioBufferSink, BlobSource, Input } from 'mediabunny'
-import type { TranscriptSegment } from '../shared/types'
 import {
   FALLBACK_MAX_MEDIA_BYTES, FALLBACK_MAX_MEDIA_DURATION_MS,
   MAX_MEDIA_DURATION_MS, TRANSCRIPTION_CHUNK_MS, TRANSCRIPTION_CONTEXT_MS,
   TRANSCRIPTION_MAX_CHUNK_MS, TRANSCRIPTION_SAMPLE_RATE,
-  validateMediaDuration, validateMediaSize
+  validateMediaDuration, validateMediaSize, type BrowserTranscriptSegment
 } from './transcription-types'
 
 export const MEDIA_SOURCE_CACHE_BYTES = 8 * 1024 * 1024
@@ -82,8 +81,8 @@ export function planMediaChunks(durationMs: number): MediaChunkRange[] {
 
 /** Restore original media timestamps and discard only overlapping context duplicates. */
 export function appendChunkTranscript(
-  previous: TranscriptSegment[], local: TranscriptSegment[], range: MediaChunkRange
-): TranscriptSegment[] {
+  previous: BrowserTranscriptSegment[], local: BrowserTranscriptSegment[], range: MediaChunkRange
+): BrowserTranscriptSegment[] {
   const accepted = local.flatMap(segment => {
     const startMs = Math.max(range.startMs, range.startMs + segment.startMs)
     const endMs = Math.min(range.endMs, range.startMs + segment.endMs)
@@ -98,6 +97,12 @@ export function appendChunkTranscript(
     if (last && segment.startMs < last.endMs) {
       if (textKey(last.text) === textKey(segment.text)) {
         last.endMs = Math.max(last.endMs, segment.endMs)
+        const warnings = [...new Set([...(last.warningCodes ?? []), ...(segment.warningCodes ?? [])])]
+        if (warnings.length) last.warningCodes = warnings
+        if (last.retryCount !== undefined || segment.retryCount !== undefined)
+          last.retryCount = Math.max(last.retryCount ?? 0, segment.retryCount ?? 0)
+        const originals = [...new Set([last.originalText, segment.originalText].filter((text): text is string => text !== undefined))]
+        if (originals.length) last.originalText = originals.join('\n\n')
         continue
       }
       // Separate slightly overlapping boundary estimates without deleting either utterance.

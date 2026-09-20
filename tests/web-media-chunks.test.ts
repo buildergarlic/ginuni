@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { appendChunkTranscript, fallbackAudioOffset, openMediaChunks, planMediaChunks, renderAudioWindow } from '../src/web/media-chunks'
-import { TRANSCRIPTION_MAX_CHUNK_MS, TRANSCRIPTION_SAMPLE_RATE } from '../src/web/transcription-types'
+import { TRANSCRIPTION_MAX_CHUNK_MS, TRANSCRIPTION_SAMPLE_RATE, type BrowserTranscriptSegment } from '../src/web/transcription-types'
 import type { TranscriptSegment } from '../src/shared/types'
 
 describe('automatic media chunk planning and recombination', () => {
@@ -49,6 +49,36 @@ describe('automatic media chunk planning and recombination', () => {
     const merged = appendChunkTranscript([], [line(2500, 3000, '네'), { ...line(4500, 5000, '네'), id: 'two' }], range)
     expect(merged.map(item => item.startMs)).toEqual([360_500, 362_500])
     expect(new Set(merged.map(item => item.id)).size).toBe(2)
+  })
+
+  it('carries warnings and recovery evidence from an overlapping duplicate into an initially clean segment', () => {
+    const [first, second] = planMediaChunks(125000)
+    const initial = appendChunkTranscript([], [line(58000, 61500)], first)
+    const incoming: BrowserTranscriptSegment = { ...line(500, 4000, '경계 문장.'), warningCodes: ['repetition'], retryCount: 1, originalText: '이전 반복 인식 '.repeat(20) }
+    const beforeInitial = structuredClone(initial), beforeIncoming = structuredClone(incoming)
+    const merged = appendChunkTranscript(initial, [incoming], second)
+    expect(merged).toEqual([{ ...initial[0], endMs: 62000, warningCodes: ['repetition'], retryCount: 1, originalText: incoming.originalText }])
+    expect(initial).toEqual(beforeInitial)
+    expect(incoming).toEqual(beforeIncoming)
+  })
+
+  it('unions warning causes, retains both distinct original outputs, and records the maximum retry count', () => {
+    const [first, second] = planMediaChunks(125000)
+    const initial = appendChunkTranscript([], [{ ...line(58000, 61500), warningCodes: ['repetition'], retryCount: 1, originalText: '첫 구간의 최초 인식' }], first)
+    const incoming: BrowserTranscriptSegment = { ...line(500, 4000), warningCodes: ['repetition', 'token-limit'], retryCount: 2, originalText: '다음 구간의 최초 인식' }
+    const merged = appendChunkTranscript(initial, [incoming], second)
+    expect(merged[0]).toMatchObject({ warningCodes: ['repetition', 'token-limit'], retryCount: 2, originalText: '첫 구간의 최초 인식\n\n다음 구간의 최초 인식' })
+    expect(initial[0]).toMatchObject({ warningCodes: ['repetition'], retryCount: 1, originalText: '첫 구간의 최초 인식' })
+  })
+
+  it('does not erase existing warnings when the overlapping duplicate is clean or duplicate identical evidence', () => {
+    const [first, second] = planMediaChunks(125000)
+    const metadata = { warningCodes: ['token-limit'] as const, retryCount: 1, originalText: '같은 최초 인식' }
+    const initial = appendChunkTranscript([], [{ ...line(58000, 61500), ...metadata, warningCodes: [...metadata.warningCodes] }], first)
+    const clean = appendChunkTranscript(initial, [line(500, 4000)], second)
+    expect(clean[0]).toMatchObject(metadata)
+    const same = appendChunkTranscript(initial, [{ ...line(500, 4000), ...metadata, warningCodes: [...metadata.warningCodes] }], second)
+    expect(same[0]).toMatchObject(metadata)
   })
 
   it('preserves known delayed or shorter soundtracks in the legacy fallback, including already-padded audio', () => {

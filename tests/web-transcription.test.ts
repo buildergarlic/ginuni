@@ -61,6 +61,14 @@ describe('sequential browser transcription lifecycle', () => {
   let readChunk: ReturnType<typeof vi.fn>
   const file = (): File => ({ size: 2 * 1024 ** 3, name: 'large.mp4', arrayBuffer: vi.fn(() => { throw new Error('must never read whole movie') }) } as unknown as File)
   const line = (text = '안녕하세요', startMs = 3000) => [{ id: 'web-segment-1', startMs, endMs: startMs + 1000, text, speakerId: '' }]
+  function enableGpu(): void {
+    vi.stubGlobal('navigator', { gpu: { requestAdapter: vi.fn(async () => ({
+      features: new Set(['shader-f16']), limits: { maxBufferSize: 1024 ** 3, maxStorageBufferBindingSize: 256 * 1024 ** 2 }, isFallbackAdapter: false
+    })) } })
+  }
+  function mediaDuration(durationMs: number): void {
+    vi.mocked(openMediaChunks).mockResolvedValue({ durationMs, ranges: planMediaChunks(durationMs), dispose: disposeMedia, readChunk })
+  }
 
   class MockWorker {
     onmessage: ((event: MessageEvent<TranscriptionWorkerResponse>) => void) | null = null
@@ -174,5 +182,92 @@ describe('sequential browser transcription lifecycle', () => {
     await expect(transcribeFile(file(), { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' })
     expect(openMediaChunks).not.toHaveBeenCalled()
     expect(workers).toHaveLength(0)
+  })
+
+  it('re-reads only the failed first GPU window for automatic CPU fallback and retains warning metadata', async () => {
+    enableGpu(); mediaDuration(10000)
+    const progress = vi.fn()
+    const pending = transcribeFile(file(), { onProgress: progress })
+    await vi.waitFor(() => expect(workers[0]?.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'transcribe', profile: 'korean-turbo' }), expect.any(Array)))
+    const firstRequest = workers[0].postMessage.mock.calls[0][0]
+    const stale = workers[0].onmessage!
+    workers[0].emit({ type: 'progress', chunkId: 0, progress: { percent: 40, message: 'GPU loading' } })
+    workers[0].emit({ type: 'error', chunkId: 0, message: 'GPU unavailable' })
+    await vi.waitFor(() => expect(workers[1]?.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'transcribe', chunkId: 0, profile: 'korean-small' }), expect.any(Array)))
+    const secondRequest = workers[1].postMessage.mock.calls[0][0]
+    expect(readChunk).toHaveBeenCalledTimes(2)
+    if (firstRequest.type === 'transcribe' && secondRequest.type === 'transcribe') expect(firstRequest.audio.buffer).not.toBe(secondRequest.audio.buffer)
+    stale(new MessageEvent('message', { data: { type: 'chunk', chunkId: 0, segments: line('stale GPU output') } }))
+    workers[1].emit({ type: 'chunk', chunkId: 0, segments: [{ ...line()[0], warningCodes: ['repetition'], retryCount: 1, originalText: '최초 반복 인식' }] })
+    const result = await pending
+    expect(result.profile).toBe('korean-small')
+    expect(result.segments).toHaveLength(1)
+    expect(result.segments[0]).toMatchObject({ text: '안녕하세요', warningCodes: ['repetition'], retryCount: 1, originalText: '최초 반복 인식' })
+    expect(workers).toHaveLength(2)
+    expect(workers.every(worker => worker.terminate.mock.calls.length === 1)).toBe(true)
+    expect(disposeMedia).toHaveBeenCalledOnce()
+    const percentages = progress.mock.calls.map(([value]) => value.percent)
+    expect(percentages).toEqual([...percentages].sort((a, b) => a - b))
+    expect(percentages.at(-1)).toBe(100)
+  })
+
+  it('allows automatic CPU fallback when a silent intro delayed the first actual GPU load until the next chunk', async () => {
+    enableGpu(); mediaDuration(70000)
+    const pending = transcribeFile(file()).catch(error => error)
+    await vi.waitFor(() => expect(workers[0]?.postMessage).toHaveBeenCalledTimes(1))
+    workers[0].emit({ type: 'chunk', chunkId: 0, segments: [] })
+    await vi.waitFor(() => expect(workers[0].postMessage).toHaveBeenCalledTimes(2))
+    workers[0].emit({ type: 'error', chunkId: 1, message: 'First voiced GPU load failed' })
+    await vi.waitFor(() => expect(workers[1]?.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'transcribe', chunkId: 1, profile: 'korean-small' }), expect.any(Array)))
+    workers[1].emit({ type: 'chunk', chunkId: 1, segments: line('인트로 뒤 첫 대사') })
+    const result = await pending
+    expect(result).toMatchObject({ profile: 'korean-small', segments: [{ text: '인트로 뒤 첫 대사', startMs: 61000, endMs: 62000 }] })
+    expect(readChunk.mock.calls.map(([range]) => range.id)).toEqual([0, 1, 1])
+    expect(disposeMedia).toHaveBeenCalledOnce()
+  })
+
+  it.each(['precision', 'compatible'] as const)('never silently selects a different model after a first-window failure in explicit %s mode', async koreanAsrMode => {
+    enableGpu(); mediaDuration(10000)
+    const pending = transcribeFile(file(), { koreanAsrMode })
+    const rejection = expect(pending).rejects.toThrow('model failed')
+    await vi.waitFor(() => expect(workers[0]?.postMessage).toHaveBeenCalledTimes(1))
+    workers[0].emit({ type: 'error', chunkId: 0, message: 'model failed' })
+    await rejection
+    expect(workers).toHaveLength(1)
+    expect(readChunk).toHaveBeenCalledOnce()
+    expect(disposeMedia).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a later GPU failure after a real result rather than silently mixing models or returning a partial transcript', async () => {
+    enableGpu(); mediaDuration(70000)
+    const pending = transcribeFile(file())
+    const rejection = expect(pending).rejects.toThrow('GPU lost after success')
+    await vi.waitFor(() => expect(workers[0]?.postMessage).toHaveBeenCalledTimes(1))
+    workers[0].emit({ type: 'chunk', chunkId: 0, segments: line() })
+    await vi.waitFor(() => expect(workers[0].postMessage).toHaveBeenCalledTimes(2))
+    workers[0].emit({ type: 'error', chunkId: 1, message: 'GPU lost after success' })
+    await rejection
+    expect(workers).toHaveLength(1)
+    expect(readChunk).toHaveBeenCalledTimes(2)
+    expect(disposeMedia).toHaveBeenCalledOnce()
+  })
+
+  it('cancels during the bounded fallback re-read and does not start a CPU inference or publish GPU output', async () => {
+    enableGpu(); mediaDuration(10000)
+    let finishRead!: (audio: Float32Array) => void
+    readChunk.mockResolvedValueOnce(new Float32Array(160000)).mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve }))
+    const controller = new AbortController()
+    const pending = transcribeFile(file(), { signal: controller.signal })
+    const rejection = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(workers[0]?.postMessage).toHaveBeenCalledTimes(1))
+    workers[0].emit({ type: 'error', chunkId: 0, message: 'GPU unavailable' })
+    await vi.waitFor(() => expect(readChunk).toHaveBeenCalledTimes(2))
+    controller.abort()
+    finishRead(new Float32Array(160000))
+    await rejection
+    expect(workers).toHaveLength(2)
+    expect(workers[1].postMessage).not.toHaveBeenCalled()
+    expect(workers.every(worker => worker.terminate.mock.calls.length === 1)).toBe(true)
+    expect(disposeMedia).toHaveBeenCalledOnce()
   })
 })

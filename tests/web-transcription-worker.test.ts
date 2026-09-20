@@ -1,25 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   TRANSCRIPTION_MAX_CHUNK_MS,
-  TRANSCRIPTION_MODEL,
-  TRANSCRIPTION_MODEL_REVISION,
   TRANSCRIPTION_ENGLISH_MODEL,
   TRANSCRIPTION_ENGLISH_MODEL_REVISION,
   TRANSCRIPTION_SAMPLE_RATE,
   type TranscriptionWorkerRequest,
   type TranscriptionWorkerResponse
 } from '../src/web/transcription-types'
+import { ASR_PROFILES } from '../src/web/asr-models'
+const TRANSCRIPTION_MODEL = ASR_PROFILES['korean-small'].model
+const TRANSCRIPTION_MODEL_REVISION = ASR_PROFILES['korean-small'].revision
 
 const mocks = vi.hoisted(() => ({
   pipeline: vi.fn(),
   transcribe: vi.fn(),
-  dispose: vi.fn()
+  dispose: vi.fn(),
+  findWindows: vi.fn(),
+  disposeVad: vi.fn(),
+  createVad: vi.fn()
 }))
+
+vi.mock('../src/web/speech-vad', () => ({ createSpeechDetector: mocks.createVad }))
 
 vi.mock('@huggingface/transformers', () => ({
   env: { allowLocalModels: true, useBrowserCache: false, backends: { onnx: { wasm: {} } } },
   pipeline: mocks.pipeline,
   TextStreamer: class {
+    put(_value: bigint[][]): void {}
     end(): void {}
   }
 }))
@@ -34,7 +41,7 @@ describe('persistent browser transcription worker', () => {
     scope.onmessage?.({ data } as MessageEvent<TranscriptionWorkerRequest>)
   }
 
-  function voicedChunk(chunkId: number): TranscriptionWorkerRequest {
+  function voicedChunk(chunkId: number): Extract<TranscriptionWorkerRequest, { type: 'transcribe' }> {
     return {
       type: 'transcribe',
       chunkId,
@@ -63,6 +70,9 @@ describe('persistent browser transcription worker', () => {
     replies = []
     mocks.transcribe.mockResolvedValue({ chunks: [{ text: ' 안녕하세요. ', timestamp: [0.1, 0.8] }] })
     mocks.dispose.mockResolvedValue(undefined)
+    mocks.findWindows.mockImplementation(async (audio: Float32Array) => [{ start: 0, end: audio.length }])
+    mocks.disposeVad.mockResolvedValue(undefined)
+    mocks.createVad.mockResolvedValue({ findWindows: mocks.findWindows, dispose: mocks.disposeVad })
     mocks.pipeline.mockResolvedValue(Object.assign(mocks.transcribe, { tokenizer: {}, dispose: mocks.dispose }))
     vi.stubGlobal('onmessage', null)
     vi.stubGlobal('postMessage', (message: TranscriptionWorkerResponse) => { replies.push(message) })
@@ -137,7 +147,7 @@ describe('persistent browser transcription worker', () => {
     mocks.transcribe.mockResolvedValueOnce({ chunks: [{ text: 'こんにちは。', timestamp: [0.1, 0.8] }] })
     send({ type: 'transcribe', chunkId: 40, audio: new Float32Array(16000).fill(0.25), durationMs: 1000, language: 'japanese' })
     await waitForChunk(40)
-    expect(mocks.pipeline).toHaveBeenCalledWith('automatic-speech-recognition', TRANSCRIPTION_MODEL, expect.any(Object))
+    expect(mocks.pipeline).toHaveBeenCalledWith('automatic-speech-recognition', ASR_PROFILES['multilingual-tiny'].model, expect.any(Object))
     expect(mocks.transcribe).toHaveBeenCalledWith(expect.any(Float32Array), expect.objectContaining({ language: 'japanese', task: 'transcribe' }))
     expect(replies).toContainEqual({ type: 'chunk', chunkId: 40, segments: [{ id: 'web-segment-1', startMs: 100, endMs: 800, speakerId: '', text: 'こんにちは。' }] })
     expect(replies).toContainEqual({ type: 'progress', chunkId: 40, progress: { percent: 42, message: '기기에서 일본어 음성을 분석하고 있습니다.' } })
@@ -366,6 +376,7 @@ describe('persistent browser transcription worker', () => {
     expect(primary).toEqual(originalPrimary)
     expect(mocks.transcribe.mock.calls[1][1]).not.toHaveProperty('language')
     expect(mocks.transcribe.mock.calls[1][1]).not.toHaveProperty('task')
+    for (const [, options] of mocks.transcribe.mock.calls) expect(options).not.toHaveProperty('no_repeat_ngram_size')
     expect(replies).toContainEqual({ type: 'chunk', chunkId: 30, segments: [
       { id: 'recovery-web-segment-1', startMs: 2200, endMs: 3400, speakerId: '', text: 'Recovered opening.' },
       { id: 'recovery-web-segment-2', startMs: 18_500, endMs: 20_000, speakerId: '', text: 'Exactly meets existing start.' },
@@ -543,5 +554,394 @@ describe('persistent browser transcription worker', () => {
     expect(mocks.dispose).toHaveBeenCalledOnce()
     expect(replies.some((reply) => reply.type === 'chunk')).toBe(false)
     expect(progressValues().every((percent) => percent <= 97)).toBe(true)
+  })
+
+  it('re-analyzes a Korean loop in bounded PCM views, preserves original evidence and flags the recovered draft', async () => {
+    const text = '떼리칠들에게 '.repeat(40).trim()
+    const audio = new Float32Array(30 * TRANSCRIPTION_SAMPLE_RATE).fill(0.001)
+    mocks.transcribe
+      .mockResolvedValueOnce({ chunks: [{ text, timestamp: [0, 30] }] })
+      .mockResolvedValueOnce({ chunks: [{ text: '첫 번째 대사입니다.', timestamp: [1, 2] }] })
+      .mockResolvedValueOnce({ chunks: [{ text: '두 번째 대사입니다.', timestamp: [1, 2] }] })
+      .mockResolvedValueOnce({ chunks: [{ text: '세 번째 대사입니다.', timestamp: [1, 2] }] })
+    send({ type: 'transcribe', chunkId: 50, audio, durationMs: 30000, language: 'korean' })
+    await waitForChunk(50)
+    expect(mocks.pipeline).toHaveBeenCalledOnce()
+    expect(mocks.transcribe).toHaveBeenCalledTimes(4)
+    expect(mocks.transcribe.mock.calls[0][1]).not.toHaveProperty('no_repeat_ngram_size')
+    for (const [pcm] of mocks.transcribe.mock.calls.slice(1)) {
+      expect(pcm.buffer).toBe(audio.buffer)
+      expect(pcm.length).toBeLessThanOrEqual(15 * TRANSCRIPTION_SAMPLE_RATE)
+      expect(pcm[0]).toBeCloseTo(0.001)
+    }
+    for (const [, options] of mocks.transcribe.mock.calls.slice(1)) expect(options.no_repeat_ngram_size).toBe(6)
+    const result = replies.find(reply => reply.type === 'chunk' && reply.chunkId === 50)
+    expect(result).toMatchObject({ segments: [
+      { startMs: 1000, endMs: 2000, text: '첫 번째 대사입니다.', warningCodes: ['repetition'], retryCount: 1, originalText: text },
+      { startMs: 13000, endMs: 14000, text: '두 번째 대사입니다.', warningCodes: ['repetition'], retryCount: 1, originalText: text },
+      { startMs: 26000, endMs: 27000, text: '세 번째 대사입니다.', warningCodes: ['repetition'], retryCount: 1, originalText: text }
+    ] })
+    if (result?.type === 'chunk') expect(new Set(result.segments.map(segment => segment.id)).size).toBe(3)
+    expect(progressValues().at(-1)).toBe(100)
+    expect(progressValues().slice(0, -1).every(percent => percent <= 97)).toBe(true)
+    expect(progressValues()).toEqual([...progressValues()].sort((a, b) => a - b))
+  })
+
+  it('keeps a non-suspect primary passage even if recovery predicts a different passage at that time', async () => {
+    const text = '떼'.repeat(100)
+    mocks.transcribe
+      .mockResolvedValueOnce({ chunks: [
+        { text: '보존할 정상 대사', timestamp: [0, 2] },
+        { text, timestamp: [2, 10] }
+      ] })
+      .mockResolvedValueOnce({ chunks: [
+        { text: '다르게 인식된 앞부분', timestamp: [0, 2] },
+        { text: '다시 들은 뒷부분', timestamp: [3, 5] }
+      ] })
+    send({ type: 'transcribe', chunkId: 51, audio: new Float32Array(10 * TRANSCRIPTION_SAMPLE_RATE).fill(0.1), durationMs: 10000 })
+    await waitForChunk(51)
+    const result = replies.find(reply => reply.type === 'chunk' && reply.chunkId === 51)
+    expect(result).toMatchObject({ segments: [
+      { id: 'web-segment-1', text: '보존할 정상 대사', startMs: 0, endMs: 2000 },
+      { text: '다시 들은 뒷부분', startMs: 3000, endMs: 5000, warningCodes: ['repetition'], retryCount: 1, originalText: text }
+    ] })
+    if (result?.type === 'chunk') expect(result.segments[0]).not.toHaveProperty('warningCodes')
+  })
+
+  it.each(['repeat', 'empty'] as const)('preserves the complete original Korean loop when recovery is %s, without recursive retries', async mode => {
+    const text = '떼리칠들에게 '.repeat(40).trim()
+    mocks.transcribe.mockResolvedValueOnce({ chunks: [{ text, timestamp: [0, 10] }] })
+      .mockResolvedValue(mode === 'repeat' ? { chunks: [{ text, timestamp: [0, 10] }] } : { text: '', chunks: [] })
+    send({ type: 'transcribe', chunkId: 52, audio: new Float32Array(10 * TRANSCRIPTION_SAMPLE_RATE).fill(0.1), durationMs: 10000 })
+    await waitForChunk(52)
+    expect(mocks.transcribe).toHaveBeenCalledTimes(2)
+    expect(replies).toContainEqual({ type: 'chunk', chunkId: 52, segments: [
+      { id: 'web-segment-1', text, startMs: 0, endMs: 10000, speakerId: '', warningCodes: ['repetition'], retryCount: 1 }
+    ] })
+  })
+
+  it('preserves ordinary repeated Korean dialogue without flags or another inference', async () => {
+    const text = '안 돼, 안 돼! 빨리, 빨리! 아, 아, 마이크 테스트.'
+    mocks.transcribe.mockResolvedValue({ chunks: [{ text, timestamp: [0, 8] }] })
+    send({ type: 'transcribe', chunkId: 53, audio: new Float32Array(8 * TRANSCRIPTION_SAMPLE_RATE).fill(0.1), durationMs: 8000 })
+    await waitForChunk(53)
+    expect(mocks.transcribe).toHaveBeenCalledOnce()
+    expect(mocks.transcribe.mock.calls[0][1]).not.toHaveProperty('no_repeat_ngram_size')
+    expect(replies).toContainEqual({ type: 'chunk', chunkId: 53, segments: [
+      { id: 'web-segment-1', text, startMs: 0, endMs: 8000, speakerId: '' }
+    ] })
+  })
+
+  it('flags the actual token cap without truncating its text and retains it when recovery is empty', async () => {
+    mocks.transcribe.mockImplementationOnce(async (_audio, options) => {
+      options.streamer.put([Array.from({ length: 448 }, () => 100n)])
+      options.streamer.end()
+      return { chunks: [{ text: '끝부분이 잘렸을 수 있는 대사', timestamp: [0, 1] }] }
+    }).mockResolvedValue({ chunks: [] })
+    send(voicedChunk(54))
+    await waitForChunk(54)
+    expect(mocks.transcribe).toHaveBeenCalledTimes(2)
+    expect(replies).toContainEqual({ type: 'chunk', chunkId: 54, segments: [
+      { id: 'web-segment-1', text: '끝부분이 잘렸을 수 있는 대사', startMs: 0, endMs: 1000, speakerId: '', warningCodes: ['token-limit'], retryCount: 1 }
+    ] })
+  })
+
+  it('does not recursively re-analyze a maximum-size window and never copies or exceeds fifteen seconds of retry PCM', async () => {
+    const text = '떼'.repeat(100)
+    const audio = new Float32Array(64 * TRANSCRIPTION_SAMPLE_RATE).fill(0.1)
+    mocks.transcribe.mockImplementation(async pcm => ({ chunks: [{ text, timestamp: [0, pcm.length / TRANSCRIPTION_SAMPLE_RATE] }] }))
+    send({ type: 'transcribe', chunkId: 55, audio, durationMs: 64000 })
+    await waitForChunk(55)
+    expect(mocks.transcribe).toHaveBeenCalledTimes(6)
+    expect(mocks.pipeline).toHaveBeenCalledOnce()
+    for (const [pcm] of mocks.transcribe.mock.calls.slice(1)) {
+      expect(pcm.buffer).toBe(audio.buffer)
+      expect(pcm.length).toBeLessThanOrEqual(15 * TRANSCRIPTION_SAMPLE_RATE)
+    }
+    expect(replies).toContainEqual({ type: 'chunk', chunkId: 55, segments: [
+      { id: 'web-segment-1', text, startMs: 0, endMs: 64000, speakerId: '', warningCodes: ['repetition'], retryCount: 1 }
+    ] })
+  })
+
+  it('waits for Korean quality recovery before completion and serialized disposal', async () => {
+    let completeRetry!: (output: unknown) => void
+    mocks.transcribe.mockResolvedValueOnce({ chunks: [{ text: '떼'.repeat(100), timestamp: [0, 8] }] })
+      .mockImplementationOnce(() => new Promise(resolve => { completeRetry = resolve }))
+    send({ type: 'transcribe', chunkId: 56, audio: new Float32Array(8 * TRANSCRIPTION_SAMPLE_RATE).fill(0.1), durationMs: 8000 })
+    await vi.waitFor(() => expect(mocks.transcribe).toHaveBeenCalledTimes(2))
+    send({ type: 'dispose' })
+    expect(replies.some(reply => reply.type === 'chunk')).toBe(false)
+    expect(progressValues().every(percent => percent <= 97)).toBe(true)
+    expect(mocks.dispose).not.toHaveBeenCalled()
+    completeRetry({ chunks: [{ text: '다시 인식한 대사', timestamp: [1, 2] }] })
+    await vi.waitFor(() => expect(replies).toContainEqual({ type: 'disposed' }))
+    expect(mocks.dispose).toHaveBeenCalledOnce()
+    expect(replies.findIndex(reply => reply.type === 'chunk')).toBeLessThan(replies.findIndex(reply => reply.type === 'disposed'))
+  })
+
+  it('returns no partial chunk and disposes the model if Korean quality recovery fails', async () => {
+    mocks.transcribe.mockResolvedValueOnce({ chunks: [{ text: '떼'.repeat(100), timestamp: [0, 8] }] })
+      .mockRejectedValueOnce(new Error('recovery runtime failure'))
+    send({ type: 'transcribe', chunkId: 57, audio: new Float32Array(8 * TRANSCRIPTION_SAMPLE_RATE).fill(0.1), durationMs: 8000 })
+    await vi.waitFor(() => expect(replies.some(reply => reply.type === 'error')).toBe(true))
+    expect(replies.some(reply => reply.type === 'chunk')).toBe(false)
+    expect(mocks.dispose).toHaveBeenCalledOnce()
+    expect(progressValues().every(percent => percent <= 97)).toBe(true)
+  })
+
+  it('restores the sound-window offset for a recovered Korean segment and its warning', async () => {
+    const text = '떼'.repeat(100)
+    const audio = new Float32Array(14 * TRANSCRIPTION_SAMPLE_RATE)
+    audio.fill(0.1, 3 * TRANSCRIPTION_SAMPLE_RATE, 11 * TRANSCRIPTION_SAMPLE_RATE)
+    mocks.transcribe.mockResolvedValueOnce({ chunks: [{ text, timestamp: [0.25, 8.25] }] })
+      .mockResolvedValueOnce({ chunks: [{ text: '원본 시간의 대사', timestamp: [0.5, 1.5] }] })
+    send({ type: 'transcribe', chunkId: 58, audio, durationMs: 14000 })
+    await waitForChunk(58)
+    expect(replies).toContainEqual({ type: 'chunk', chunkId: 58, segments: [
+      { id: 'quality-retry-1-web-segment-1', text: '원본 시간의 대사', startMs: 3250, endMs: 4250, speakerId: '', warningCodes: ['repetition'], retryCount: 1, originalText: text }
+    ] })
+  })
+
+  it('counts a token limit per inference rather than adding healthy internal windows together', async () => {
+    mocks.transcribe.mockImplementation(async (_audio, options) => {
+      for (let index = 0; index < 2; index += 1) {
+        options.streamer.put([Array.from({ length: 224 }, () => 100n)])
+        options.streamer.end()
+      }
+      return { chunks: [{ text: '정상적으로 종료한 대사입니다.', timestamp: [0, 40] }] }
+    })
+    send({ type: 'transcribe', chunkId: 59, audio: new Float32Array(40 * TRANSCRIPTION_SAMPLE_RATE).fill(0.1), durationMs: 40000 })
+    await waitForChunk(59)
+    expect(mocks.transcribe).toHaveBeenCalledOnce()
+    const result = replies.find(reply => reply.type === 'chunk' && reply.chunkId === 59)
+    if (result?.type === 'chunk') expect(result.segments[0]).not.toHaveProperty('warningCodes')
+  })
+
+  it('leaves the existing English decoding path unchanged even for repeated output', async () => {
+    const text = 'A deliberately repeated English example. '.repeat(12)
+    mocks.transcribe.mockResolvedValue({ chunks: [{ text, timestamp: [0, 10] }] })
+    send({ type: 'transcribe', chunkId: 60, language: 'english', audio: new Float32Array(10 * TRANSCRIPTION_SAMPLE_RATE).fill(0.1), durationMs: 10000 })
+    await waitForChunk(60)
+    expect(mocks.transcribe).toHaveBeenCalledOnce()
+    expect(replies).toContainEqual({ type: 'chunk', chunkId: 60, segments: [
+      { id: 'web-segment-1', text: text.trim(), startMs: 0, endMs: 10000, speakerId: '' }
+    ] })
+  })
+
+  it('loads the pinned GPU precision profile with fp16 encoder and q4 decoder and reuses it', async () => {
+    send({ ...voicedChunk(70), profile: 'korean-turbo' })
+    await waitForChunk(70)
+    send({ ...voicedChunk(71), profile: 'korean-turbo' })
+    await waitForChunk(71)
+    expect(mocks.pipeline).toHaveBeenCalledOnce()
+    expect(mocks.pipeline).toHaveBeenCalledWith('automatic-speech-recognition', 'onnx-community/whisper-large-v3-turbo', expect.objectContaining({
+      revision: '360ebcde2559d60bb474678be3c1de9ef347d01a', device: 'webgpu',
+      dtype: { encoder_model: 'fp16', decoder_model_merged: 'q4' }
+    }))
+    expect(mocks.transcribe).toHaveBeenCalledTimes(2)
+    expect(mocks.transcribe).toHaveBeenLastCalledWith(expect.any(Float32Array), expect.objectContaining({ language: 'korean', task: 'transcribe' }))
+    expect(mocks.createVad).toHaveBeenCalledOnce()
+    expect(mocks.findWindows).toHaveBeenCalledTimes(2)
+  })
+
+  it('skips ASR for nonzero background audio without detected speech and reuses that detector when speech arrives', async () => {
+    mocks.findWindows.mockResolvedValueOnce([])
+    send({ ...voicedChunk(72), profile: 'korean-turbo' })
+    await waitForChunk(72)
+    expect(mocks.createVad).toHaveBeenCalledOnce()
+    expect(mocks.pipeline).not.toHaveBeenCalled()
+    expect(mocks.transcribe).not.toHaveBeenCalled()
+    expect(replies).toContainEqual({ type: 'chunk', chunkId: 72, segments: [] })
+    expect(replies).toContainEqual({ type: 'progress', chunkId: 72, progress: { percent: 100, message: expect.stringContaining('말소리가 검출되지') } })
+    send({ ...voicedChunk(73), profile: 'korean-turbo' })
+    await waitForChunk(73)
+    expect(mocks.createVad).toHaveBeenCalledOnce()
+    expect(mocks.findWindows).toHaveBeenCalledTimes(2)
+    expect(mocks.pipeline).toHaveBeenCalledOnce()
+    expect(mocks.transcribe).toHaveBeenCalledOnce()
+  })
+
+  it('never initializes VAD or ASR for digital silence, even for the precision profile', async () => {
+    send({ type: 'transcribe', chunkId: 74, language: 'korean', profile: 'korean-turbo', audio: new Float32Array(10 * TRANSCRIPTION_SAMPLE_RATE), durationMs: 10000 })
+    await waitForChunk(74)
+    expect(mocks.createVad).not.toHaveBeenCalled()
+    expect(mocks.findWindows).not.toHaveBeenCalled()
+    expect(mocks.pipeline).not.toHaveBeenCalled()
+  })
+
+  it('adds VAD offsets to digital-silence trim offsets without copying audio or shifting the original timeline', async () => {
+    const rate = TRANSCRIPTION_SAMPLE_RATE
+    const audio = new Float32Array(14 * rate)
+    audio.fill(0.2, 3 * rate, 11 * rate)
+    mocks.findWindows.mockResolvedValueOnce([{ start: rate, end: 3 * rate }, { start: 5 * rate, end: 7 * rate }])
+    mocks.transcribe.mockResolvedValueOnce({ chunks: [{ text: '첫 발화', timestamp: [0.25, 0.75] }] })
+      .mockResolvedValueOnce({ chunks: [{ text: '둘째 발화', timestamp: [0.25, 0.75] }] })
+    send({ type: 'transcribe', chunkId: 75, audio, durationMs: 14000 })
+    await waitForChunk(75)
+    const detectorInput = mocks.findWindows.mock.calls[0][0] as Float32Array
+    expect(detectorInput.buffer).toBe(audio.buffer)
+    expect(detectorInput.byteOffset).toBe(2.75 * rate * 4)
+    expect(detectorInput.length).toBe(8.5 * rate)
+    expect(mocks.transcribe.mock.calls.map(([pcm]) => pcm.byteOffset)).toEqual([3.75 * rate * 4, 7.75 * rate * 4])
+    for (const [pcm] of mocks.transcribe.mock.calls) { expect(pcm.buffer).toBe(audio.buffer); expect(pcm.length).toBe(2 * rate) }
+    expect(replies).toContainEqual({ type: 'chunk', chunkId: 75, segments: [
+      { id: 'piece-1-web-segment-1', text: '첫 발화', startMs: 4000, endMs: 4500, speakerId: '' },
+      { id: 'piece-2-web-segment-1', text: '둘째 발화', startMs: 8000, endMs: 8500, speakerId: '' }
+    ] })
+  })
+
+  it('owns overlapping VAD context by midpoint and keeps a shared-boundary utterance exactly once', async () => {
+    const rate = TRANSCRIPTION_SAMPLE_RATE
+    mocks.findWindows.mockResolvedValueOnce([{ start: 0, end: 28 * rate }, { start: 27.36 * rate, end: 40 * rate }])
+    mocks.transcribe.mockResolvedValueOnce({ chunks: [
+      { text: '앞 대사', timestamp: [26, 27] },
+      { text: '경계 대사', timestamp: [27.6, 27.76] }
+    ] }).mockResolvedValueOnce({ chunks: [
+      { text: '경계 대사', timestamp: [0.24, 0.4] },
+      { text: '뒤 대사', timestamp: [1, 2] }
+    ] })
+    send({ type: 'transcribe', chunkId: 76, audio: new Float32Array(40 * rate).fill(0.2), durationMs: 40000 })
+    await waitForChunk(76)
+    expect(replies).toContainEqual({ type: 'chunk', chunkId: 76, segments: [
+      { id: 'piece-1-web-segment-1', text: '앞 대사', startMs: 26000, endMs: 27000, speakerId: '' },
+      { id: 'piece-2-web-segment-1', text: '경계 대사', startMs: 27600, endMs: 27760, speakerId: '' },
+      { id: 'piece-2-web-segment-2', text: '뒤 대사', startMs: 28360, endMs: 29360, speakerId: '' }
+    ] })
+    expect(mocks.transcribe).toHaveBeenCalledTimes(2)
+  })
+
+  it('reuses one VAD instance across Korean chunks and disposes VAD and ASR once on shutdown', async () => {
+    send(voicedChunk(77)); await waitForChunk(77)
+    send(voicedChunk(78)); await waitForChunk(78)
+    expect(mocks.createVad).toHaveBeenCalledOnce()
+    expect(mocks.disposeVad).not.toHaveBeenCalled()
+    send({ type: 'dispose' })
+    await vi.waitFor(() => expect(replies).toContainEqual({ type: 'disposed' }))
+    expect(mocks.disposeVad).toHaveBeenCalledOnce()
+    expect(mocks.dispose).toHaveBeenCalledOnce()
+    send({ type: 'dispose' })
+    await vi.waitFor(() => expect(replies.filter(reply => reply.type === 'disposed')).toHaveLength(2))
+    expect(mocks.disposeVad).toHaveBeenCalledOnce()
+    expect(mocks.dispose).toHaveBeenCalledOnce()
+  })
+
+  it('releases a loaded VAD even when no ASR model was needed for the entire request', async () => {
+    mocks.findWindows.mockResolvedValueOnce([])
+    send(voicedChunk(79)); await waitForChunk(79)
+    send({ type: 'dispose' })
+    await vi.waitFor(() => expect(replies).toContainEqual({ type: 'disposed' }))
+    expect(mocks.disposeVad).toHaveBeenCalledOnce()
+    expect(mocks.pipeline).not.toHaveBeenCalled()
+    expect(mocks.dispose).not.toHaveBeenCalled()
+  })
+
+  it('releases both sessions before changing a loaded Korean CPU profile to GPU precision', async () => {
+    send({ ...voicedChunk(80), profile: 'korean-small' }); await waitForChunk(80)
+    send({ ...voicedChunk(81), profile: 'korean-turbo' }); await waitForChunk(81)
+    expect(mocks.dispose).toHaveBeenCalledOnce()
+    expect(mocks.disposeVad).toHaveBeenCalledOnce()
+    expect(mocks.createVad).toHaveBeenCalledTimes(2)
+    expect(mocks.pipeline).toHaveBeenCalledTimes(2)
+    expect(mocks.pipeline.mock.calls.map(([, model]) => model)).toEqual([ASR_PROFILES['korean-small'].model, ASR_PROFILES['korean-turbo'].model])
+    expect(mocks.dispose.mock.invocationCallOrder[0]).toBeLessThan(mocks.pipeline.mock.invocationCallOrder[1])
+    expect(mocks.disposeVad.mock.invocationCallOrder[0]).toBeLessThan(mocks.createVad.mock.invocationCallOrder[1])
+  })
+
+  it.each([
+    { language: 'korean' as const, profile: 'english-base' as const },
+    { language: 'korean' as const, profile: 'multilingual-tiny' as const },
+    { language: 'english' as const, profile: 'korean-turbo' as const },
+    { language: 'english' as const, profile: 'multilingual-tiny' as const },
+    { language: 'japanese' as const, profile: 'english-base' as const },
+    { language: 'japanese' as const, profile: 'korean-small' as const }
+  ])('rejects an incompatible $language/$profile request before loading any model', async ({ language, profile }) => {
+    send({ ...voicedChunk(82), language, profile })
+    await vi.waitFor(() => expect(replies).toContainEqual({ type: 'error', chunkId: 82, message: expect.stringContaining('일치하지') }))
+    expect(mocks.createVad).not.toHaveBeenCalled()
+    expect(mocks.pipeline).not.toHaveBeenCalled()
+    expect(mocks.transcribe).not.toHaveBeenCalled()
+    expect(replies.some(reply => reply.type === 'chunk')).toBe(false)
+  })
+
+  it('returns no ASR text and releases the VAD when speech detection fails', async () => {
+    mocks.findWindows.mockRejectedValueOnce(new Error('VAD runtime failure'))
+    send(voicedChunk(83))
+    await vi.waitFor(() => expect(replies).toContainEqual({ type: 'error', chunkId: 83, message: expect.any(String) }))
+    expect(mocks.disposeVad).toHaveBeenCalledOnce()
+    expect(mocks.pipeline).not.toHaveBeenCalled()
+    expect(replies.some(reply => reply.type === 'chunk')).toBe(false)
+    send(voicedChunk(84)); await waitForChunk(84)
+    expect(mocks.createVad).toHaveBeenCalledTimes(2)
+    expect(mocks.pipeline).toHaveBeenCalledOnce()
+  })
+
+  it('keeps English and other foreign languages outside the Korean VAD path', async () => {
+    send({ ...voicedChunk(85), language: 'english', profile: 'english-base' }); await waitForChunk(85)
+    send({ ...voicedChunk(86), language: 'japanese', profile: 'multilingual-tiny' }); await waitForChunk(86)
+    expect(mocks.createVad).not.toHaveBeenCalled()
+    expect(mocks.findWindows).not.toHaveBeenCalled()
+    expect(mocks.pipeline).toHaveBeenCalledTimes(2)
+  })
+
+  it('deduplicates one jittered utterance whose estimates land on opposite sides of the VAD ownership midpoint', async () => {
+    const rate = TRANSCRIPTION_SAMPLE_RATE
+    mocks.findWindows.mockResolvedValueOnce([{ start: 0, end: 28 * rate }, { start: 27.36 * rate, end: 32 * rate }])
+    mocks.transcribe.mockResolvedValueOnce({ chunks: [{ text: '같은 발화', timestamp: [27.1, 27.9] }] })
+      .mockResolvedValueOnce({ chunks: [{ text: '같은 발화', timestamp: [0.24, 1.04] }] })
+    send({ type: 'transcribe', chunkId: 87, audio: new Float32Array(32 * rate).fill(0.2), durationMs: 32000 })
+    await waitForChunk(87)
+    expect(replies).toContainEqual({ type: 'chunk', chunkId: 87, segments: [
+      { id: 'piece-1-web-segment-1', text: '같은 발화', startMs: 27100, endMs: 28400, speakerId: '' }
+    ] })
+  })
+
+  it('waits for VAD release even if ASR disposal rejects before processing another request', async () => {
+    send(voicedChunk(88)); await waitForChunk(88)
+    let finishVad!: () => void
+    mocks.dispose.mockRejectedValueOnce(new Error('ASR dispose failed'))
+    mocks.disposeVad.mockImplementationOnce(() => new Promise<void>(resolve => { finishVad = resolve }))
+    const repliesBeforeDispose = replies.length
+    send({ type: 'dispose' })
+    send(voicedChunk(89))
+    await vi.waitFor(() => expect(mocks.disposeVad).toHaveBeenCalledOnce())
+    try {
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(replies.slice(repliesBeforeDispose).some(reply => reply.type === 'error' || reply.type === 'disposed')).toBe(false)
+      expect(mocks.createVad).toHaveBeenCalledOnce()
+      expect(mocks.pipeline).toHaveBeenCalledOnce()
+    } finally {
+      finishVad()
+      await vi.waitFor(() => expect(replies.some(reply => reply.type === 'error')).toBe(true))
+      await waitForChunk(89)
+    }
+    expect(mocks.createVad).toHaveBeenCalledTimes(2)
+    expect(mocks.pipeline).toHaveBeenCalledTimes(2)
+  })
+
+  it('changes only the supported repetition option for an identical short Korean recovery view and retains its initial evidence', async () => {
+    const originalText = '같은 인식 구절 '.repeat(20).trim()
+    const audio = new Float32Array(10 * TRANSCRIPTION_SAMPLE_RATE).fill(0.2)
+    mocks.transcribe.mockImplementation(async (_pcm, options) => ({ chunks: [
+      options.no_repeat_ngram_size === 6
+        ? { text: '재분석한 대사도 원음 확인이 필요합니다.', timestamp: [1, 2] }
+        : { text: originalText, timestamp: [0, 10] }
+    ] }))
+    send({ type: 'transcribe', chunkId: 90, audio, durationMs: 10000, language: 'korean' })
+    await waitForChunk(90)
+    expect(mocks.transcribe).toHaveBeenCalledTimes(2)
+    const [primary, recovery] = mocks.transcribe.mock.calls
+    expect(primary[0].buffer).toBe(audio.buffer)
+    expect(recovery[0].buffer).toBe(audio.buffer)
+    expect(recovery[0].byteOffset).toBe(primary[0].byteOffset)
+    expect(recovery[0].length).toBe(primary[0].length)
+    expect(primary[1]).not.toHaveProperty('no_repeat_ngram_size')
+    expect(recovery[1]).toMatchObject({ no_repeat_ngram_size: 6, language: 'korean', task: 'transcribe', return_timestamps: true })
+    for (const [, options] of mocks.transcribe.mock.calls) {
+      for (const unsupported of ['compression_ratio_threshold', 'logprob_threshold', 'no_speech_threshold', 'condition_on_previous_text', 'encoder_no_repeat_ngram_size'])
+        expect(options).not.toHaveProperty(unsupported)
+    }
+    expect(replies).toContainEqual({ type: 'chunk', chunkId: 90, segments: [
+      { id: 'quality-retry-1-web-segment-1', text: '재분석한 대사도 원음 확인이 필요합니다.', startMs: 1000, endMs: 2000, speakerId: '', warningCodes: ['repetition'], retryCount: 1, originalText }
+    ] })
   })
 })

@@ -10,6 +10,8 @@ import { SAMPLE_MEDIA } from './sample-media'
 import sampleTranscript from './sample-transcript.json'
 import type { TranscriptionLanguage } from './transcription-types'
 import { SPEECH_LANGUAGES, TRANSLATION_LANGUAGE_CODES, type TranslationSourceLanguage } from './languages'
+import { ASR_PROFILES, KOREAN_ASR_MODES, type AsrProfileId, type KoreanAsrMode } from './asr-models'
+import type { TranscriptionWarningCode } from './transcription-types'
 
 export const MAX_MEDIA_DURATION_MS = 3 * 60 * 60 * 1_000
 const MAX_ROWS = 20_000
@@ -26,6 +28,9 @@ export interface RowTranslation {
 
 export interface WebScriptRow extends ScriptRow {
   translation?: RowTranslation
+  asrWarnings?: TranscriptionWarningCode[]
+  asrOriginalText?: string
+  asrRetryCount?: number
 }
 
 export interface WebProject {
@@ -42,6 +47,8 @@ export interface WebProject {
   transcriptionLanguage?: TranscriptionLanguage
   dialogueLanguage?: 'original' | 'korean'
   translationSourceLanguage?: TranslationSourceLanguage
+  koreanAsrMode?: KoreanAsrMode
+  lastAsrProfile?: AsrProfileId
 }
 
 const identifierSchema = z.string().trim().min(1).max(200)
@@ -62,6 +69,9 @@ const rowSchema = z
       .enum(['unreviewed', 'needsAttention', 'approved'])
       .optional(),
     approvedAt: z.string().datetime({ offset: true }).optional(),
+    asrWarnings: z.array(z.enum(['repetition', 'token-limit'])).max(2).optional(),
+    asrOriginalText: z.string().max(100_000).optional(),
+    asrRetryCount: z.number().int().min(0).max(10).optional(),
     translation: z.object({
       sourceContent: z.string().max(10_000),
       content: z.string().max(10_000),
@@ -88,7 +98,9 @@ const projectSchema = z
     sampleId: z.enum(['market-street-1906', 'shy-guy-1947']).optional(),
     transcriptionLanguage: z.enum(SPEECH_LANGUAGES.map(item => item.speech)).optional(),
     dialogueLanguage: z.enum(['original', 'korean']).optional(),
-    translationSourceLanguage: z.enum(TRANSLATION_LANGUAGE_CODES).optional()
+    translationSourceLanguage: z.enum(TRANSLATION_LANGUAGE_CODES).optional(),
+    koreanAsrMode: z.enum(KOREAN_ASR_MODES).optional(),
+    lastAsrProfile: z.enum(Object.keys(ASR_PROFILES) as [AsrProfileId, ...AsrProfileId[]]).optional()
   })
   .superRefine((project, context) => {
     const ids = new Set<string>()

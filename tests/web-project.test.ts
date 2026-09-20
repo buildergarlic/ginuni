@@ -48,6 +48,26 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('web project backups', () => {
+  it('preserves Korean ASR settings, recovery evidence and independent translation review through save and restore', () => {
+    const draft = project({ koreanAsrMode: 'precision', lastAsrProfile: 'korean-turbo', rows: [{
+      ...row(), asrWarnings: ['repetition', 'token-limit'], asrOriginalText: '처음 인식한 대사 '.repeat(1500), asrRetryCount: 1,
+      translation: { sourceContent: '함께 걸을까?', content: '함께 걸을까요?', draft: '함께 걸을까요?', reviewed: true }
+    }] })
+    const restored = parseProject(serializeProject(draft))
+    expect(restored).toEqual(draft)
+    saveProject(restored)
+    expect(loadProjects()).toEqual([draft])
+    expect(restored.rows[0].reviewed).toBe(false)
+  })
+
+  it.each([
+    { koreanAsrMode: 'tiny' }, { lastAsrProfile: 'unknown' },
+    { rows: [{ ...row(), asrWarnings: ['invented'] }] },
+    { rows: [{ ...row(), asrRetryCount: -1 }] }
+  ])('rejects unsupported ASR settings/evidence in imported backups: %j', invalid => {
+    expect(() => parseProject(JSON.stringify({ ...project(), ...invalid }))).toThrow(/형식/)
+  })
+
   it('creates an empty manual draft that round trips independently from the sample', () => {
     const draft = createProject()
     expect(draft.id).not.toBe(createProject().id)

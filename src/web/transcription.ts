@@ -1,19 +1,19 @@
-import type { TranscriptSegment } from '../shared/types'
 import {
-  type BrowserTranscriptionResult, type TranscriptionProgress, type TranscriptionLanguage,
+  type BrowserTranscriptionResult, type BrowserTranscriptSegment, type TranscriptionProgress, type TranscriptionLanguage,
   type TranscriptionWorkerRequest, type TranscriptionWorkerResponse
 } from './transcription-types'
 import { abortError, checkAborted, openMediaChunks, appendChunkTranscript } from './media-chunks'
+import { ASR_PROFILES, selectAsrProfile, type AsrProfileId, type KoreanAsrMode } from './asr-models'
 
 export { MAX_MEDIA_DURATION_MS } from './transcription-types'
 export type { TranscriptionLanguage } from './transcription-types'
 
 /** One worker/model per job; only one PCM window may be in flight at a time. */
-function createWorkerSession(signal: AbortSignal | undefined, onProgress: (progress: TranscriptionProgress) => void, language: TranscriptionLanguage) {
+function createWorkerSession(signal: AbortSignal | undefined, onProgress: (progress: TranscriptionProgress) => void, language: TranscriptionLanguage, profile: AsrProfileId) {
   const worker = new Worker(new URL('./transcription.worker.ts', import.meta.url), { type: 'module' })
   let closed = false
   let failure: Error | undefined
-  let pending: { id: number; resolve: (segments: TranscriptSegment[]) => void; reject: (error: Error) => void } | undefined
+  let pending: { id: number; resolve: (segments: BrowserTranscriptSegment[]) => void; reject: (error: Error) => void } | undefined
   let disposed: (() => void) | undefined
   const terminate = (): void => {
     if (closed) return
@@ -47,13 +47,13 @@ function createWorkerSession(signal: AbortSignal | undefined, onProgress: (progr
   signal?.addEventListener('abort', onAbort, { once: true })
   if (signal?.aborted) onAbort()
   return {
-    async transcribe(chunkId: number, audio: Float32Array, durationMs: number): Promise<TranscriptSegment[]> {
+    async transcribe(chunkId: number, audio: Float32Array, durationMs: number): Promise<BrowserTranscriptSegment[]> {
       checkAborted(signal)
       if (failure) throw failure
       if (closed || pending) throw new Error('음성 분석 구간을 순서대로 처리해야 합니다.')
       return new Promise((resolve, reject) => {
         pending = { id: chunkId, resolve, reject }
-        const request: TranscriptionWorkerRequest = { type: 'transcribe', chunkId, audio, durationMs, language }
+        const request: TranscriptionWorkerRequest = { type: 'transcribe', chunkId, audio, durationMs, language, profile }
         try { worker.postMessage(request, [audio.buffer]) } catch (error) {
           fail(error instanceof Error ? error : new Error('음성 AI를 시작하지 못했습니다.'))
         }
@@ -72,15 +72,16 @@ function createWorkerSession(signal: AbortSignal | undefined, onProgress: (progr
 
 export async function transcribeFile(
   file: File,
-  options: { signal?: AbortSignal; onProgress?: (progress: TranscriptionProgress) => void; language?: TranscriptionLanguage } = {}
+  options: { signal?: AbortSignal; onProgress?: (progress: TranscriptionProgress) => void; language?: TranscriptionLanguage; koreanAsrMode?: KoreanAsrMode } = {}
 ): Promise<BrowserTranscriptionResult> {
-  const { signal, onProgress, language = 'korean' } = options
+  const { signal, onProgress, language = 'korean', koreanAsrMode = 'auto' } = options
   checkAborted(signal)
   if (typeof Worker === 'undefined') throw new Error('이 브라우저는 웹 음성 분석을 지원하지 않습니다. 최신 Chrome·Edge에서 열어 주세요.')
   onProgress?.({ percent: 1, message: '파일에서 음성 트랙과 전체 영상 길이를 확인하고 있습니다.' })
   const media = await openMediaChunks(file, signal)
   let session: ReturnType<typeof createWorkerSession> | undefined
-  let segments: TranscriptSegment[] = []
+  let segments: BrowserTranscriptSegment[] = []
+  let profile: AsrProfileId | undefined
   let index = 0
   let percent = 1
   const report = (progress: TranscriptionProgress): void => {
@@ -90,7 +91,10 @@ export async function transcribeFile(
   }
   try {
     checkAborted(signal)
-    session = createWorkerSession(signal, report, language)
+    profile = await selectAsrProfile(language, koreanAsrMode)
+    checkAborted(signal)
+    report({ percent: 0, message: `${ASR_PROFILES[profile].label} 모델을 사용합니다.` })
+    session = createWorkerSession(signal, report, language, profile)
     for (const range of media.ranges) {
       index = range.id
       checkAborted(signal)
@@ -98,7 +102,21 @@ export async function transcribeFile(
       // No prefetch: the previous worker result must finish before decoding the next window.
       const audio = await media.readChunk(range)
       checkAborted(signal)
-      const local = await session.transcribe(range.id, audio, range.endMs - range.startMs)
+      let local: BrowserTranscriptSegment[]
+      try {
+        local = await session.transcribe(range.id, audio, range.endMs - range.startMs)
+      } catch (error) {
+        checkAborted(signal)
+        if (profile !== 'korean-turbo' || koreanAsrMode !== 'auto' || segments.length !== 0) throw error
+        await session.dispose()
+        profile = 'korean-small'
+        report({ percent: 0, message: '이 기기에서 GPU 정밀 모델을 실행하지 못해 Whisper small 호환 모델로 전환합니다.' })
+        session = createWorkerSession(signal, report, language, profile)
+        // The first transfer detached its PCM. Re-read just this bounded window.
+        const retryAudio = await media.readChunk(range)
+        checkAborted(signal)
+        local = await session.transcribe(range.id, retryAudio, range.endMs - range.startMs)
+      }
       checkAborted(signal)
       segments = appendChunkTranscript(segments, local, range)
       report({ percent: 100, message: '분석 결과를 원본 영상의 시간에 맞춰 연결했습니다.' })
@@ -110,5 +128,5 @@ export async function transcribeFile(
   }
   checkAborted(signal)
   onProgress?.({ percent: 100, message: `${media.ranges.length}개 구간의 음성 분석을 완료했습니다. 이어 붙인 대사와 시간을 확인해 주세요.` })
-  return { segments, durationMs: media.durationMs }
+  return { segments, durationMs: media.durationMs, profile }
 }

@@ -1,5 +1,6 @@
 import type { TranscriptSegment } from '../shared/types'
 import type { SpeechLanguage } from './languages'
+import type { AsrProfileId } from './asr-models'
 
 export const MAX_MEDIA_DURATION_MS = 3 * 60 * 60 * 1000
 export const FALLBACK_MAX_MEDIA_BYTES = 100 * 1024 * 1024
@@ -17,23 +18,33 @@ export const TRANSCRIPTION_ENGLISH_MODEL_REVISION = '95bf40a508535962c6483ead402
 
 export type TranscriptionLanguage = SpeechLanguage
 
+export type TranscriptionWarningCode = 'repetition' | 'token-limit'
+
+export interface BrowserTranscriptSegment extends TranscriptSegment {
+  warningCodes?: TranscriptionWarningCode[]
+  retryCount?: number
+  /** Initial ASR output retained when a bounded recovery supplies a new draft. */
+  originalText?: string
+}
+
 export interface TranscriptionProgress {
   percent: number
   message: string
 }
 
 export interface BrowserTranscriptionResult {
-  segments: TranscriptSegment[]
+  segments: BrowserTranscriptSegment[]
   durationMs: number
+  profile?: AsrProfileId
 }
 
 export type TranscriptionWorkerRequest =
-  | { type: 'transcribe'; chunkId: number; audio: Float32Array; durationMs: number; language?: TranscriptionLanguage }
+  | { type: 'transcribe'; chunkId: number; audio: Float32Array; durationMs: number; language?: TranscriptionLanguage; profile?: AsrProfileId }
   | { type: 'dispose' }
 
 export type TranscriptionWorkerResponse =
   | { type: 'progress'; chunkId: number; progress: TranscriptionProgress }
-  | { type: 'chunk'; chunkId: number; segments: TranscriptSegment[] }
+  | { type: 'chunk'; chunkId: number; segments: BrowserTranscriptSegment[] }
   | { type: 'disposed' }
   | { type: 'error'; chunkId?: number; message: string }
 
@@ -63,12 +74,12 @@ function finiteTimestamp(value: unknown): value is number {
 export function normalizeTranscript(
   output: unknown,
   durationMs: number
-): TranscriptSegment[] {
+): BrowserTranscriptSegment[] {
   validateMediaDuration(durationMs)
   if (!output || typeof output !== 'object' || Array.isArray(output)) return []
   const result = output as { chunks?: unknown; text?: unknown }
   const chunks = Array.isArray(result.chunks) ? result.chunks : []
-  const segments: TranscriptSegment[] = []
+  const segments: BrowserTranscriptSegment[] = []
 
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index]
