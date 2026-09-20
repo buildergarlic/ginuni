@@ -11,6 +11,7 @@ import {
   loadProjects,
   MAX_MEDIA_DURATION_MS,
   parseProject,
+  resolveAttachedMediaDuration,
   saveProject,
   serializeProject,
   type WebProject
@@ -153,6 +154,71 @@ describe('web project backups', () => {
 
   it('validates an in-memory project before serializing, including nonfinite times', () => {
     expect(() => serializeProject(project({ rows: [row({ endMs: NaN })] }))).toThrow()
+  })
+})
+
+describe('reattaching media to an existing timeline', () => {
+  it('accepts the real 2 ms decoder disagreement without changing any restored row or timestamp', () => {
+    const draft = parseProject(serializeProject(project({
+      source: 'transcription',
+      durationMs: 1_461_662,
+      rows: [
+        { ...row({ id: 'first', startMs: 0, endMs: 6000 }), asrWarnings: ['repetition'], asrOriginalText: '처음 인식한 대사', asrRetryCount: 1 },
+        row({ id: 'last-dialogue', startMs: 1_450_000, endMs: 1_458_500, reviewed: true }),
+        row({ id: 'trailing-description', kind: 'descriptionGap', startMs: 1_458_500, endMs: 1_461_662, content: '화면이 어두워진다.' })
+      ]
+    })))
+    const before = serializeProject(draft)
+    for (const item of draft.rows) Object.freeze(item)
+    Object.freeze(draft.rows)
+    Object.freeze(draft)
+
+    const durationMs = resolveAttachedMediaDuration(draft, 1_461_660)
+
+    expect(durationMs).toBe(1_461_662)
+    expect(serializeProject(draft)).toBe(before)
+    expect(parseProject(serializeProject({ ...draft, durationMs })).rows).toEqual(draft.rows)
+  })
+
+  it.each([1, 2, 9, 10])('preserves a %i ms rounding difference at the end of the existing timeline', delta => {
+    const draft = project({ durationMs: 30_000 + delta, rows: [row({ endMs: 30_000 + delta })] })
+    expect(resolveAttachedMediaDuration(draft, 30_000)).toBe(draft.durationMs)
+    expect(draft.rows[0].endMs).toBe(30_000 + delta)
+  })
+
+  it.each([11, 1000])('rejects a file %i ms shorter than the last row and leaves the draft unchanged', delta => {
+    const draft = project({ durationMs: 30_000 + delta, rows: [row({ endMs: 30_000 + delta })] })
+    const before = serializeProject(draft)
+    expect(() => resolveAttachedMediaDuration(draft, 30_000)).toThrow(/선택한 영상이 대본의 종료 시간보다 짧습니다/)
+    expect(serializeProject(draft)).toBe(before)
+  })
+
+  it('refuses a near-boundary row when the saved project duration describes a substantially longer file', () => {
+    const draft = project({ durationMs: 45_000, rows: [row({ endMs: 30_002 })] })
+    expect(() => resolveAttachedMediaDuration(draft, 30_000)).toThrow(/선택한 영상이 대본의 종료 시간보다 짧습니다/)
+    expect(draft.durationMs).toBe(45_000)
+    expect(draft.rows[0].endMs).toBe(30_002)
+  })
+
+  it('uses the observed duration when there are no rows, including the supported 3 hour boundary', () => {
+    const draft = project({ durationMs: 0, rows: [] })
+    expect(resolveAttachedMediaDuration(draft, 1)).toBe(1)
+    expect(resolveAttachedMediaDuration(draft, MAX_MEDIA_DURATION_MS)).toBe(MAX_MEDIA_DURATION_MS)
+    expect(draft.durationMs).toBe(0)
+  })
+
+  it.each([30_000, 30_002, 45_000])('uses the observed duration when all rows fit even if the old duration was %i ms', durationMs => {
+    const draft = project({ durationMs, rows: [row({ endMs: 30_000 })] })
+    expect(resolveAttachedMediaDuration(draft, 30_000)).toBe(30_000)
+    expect(draft.durationMs).toBe(durationMs)
+    expect(draft.rows[0].endMs).toBe(30_000)
+  })
+
+  it.each([NaN, 0, -1, Infinity, 1.5, MAX_MEDIA_DURATION_MS + 1, Number.MAX_SAFE_INTEGER + 1])('rejects invalid observed media duration %s before applying any tolerance', observed => {
+    const draft = project({ rows: [] })
+    expect(() => resolveAttachedMediaDuration(draft, observed)).toThrow(/영상 길이/)
+    expect(draft.durationMs).toBe(45_000)
+    expect(draft.rows).toEqual([])
   })
 })
 

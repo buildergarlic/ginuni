@@ -11,6 +11,7 @@ import {
   deleteProject,
   parseProject,
   serializeProject,
+  resolveAttachedMediaDuration,
   importSubtitle,
   MAX_MEDIA_DURATION_MS,
   type WebProject,
@@ -182,21 +183,12 @@ export default function App() {
         throw new Error(
           '파일을 읽는 동안 작업이 변경되었습니다. 변경한 대본을 보존했습니다. 파일을 다시 선택해 주세요.'
         )
-      if (
-        !Number.isSafeInteger(duration) ||
-        duration <= 0 ||
-        duration > MAX_MEDIA_DURATION_MS
-      )
-        throw new Error('영상 길이는 0초 초과, 3시간 이하여야 합니다.')
-      if (project.rows.some((row) => row.endMs > duration))
-        throw new Error(
-          '선택한 영상이 대본의 종료 시간보다 짧습니다. 새 작업을 만들거나 행 시간을 먼저 수정해 주세요.'
-        )
+      const attachedDuration = resolveAttachedMediaDuration(project, duration)
       setFile(selected)
       update({
         ...project,
         mediaName: selected.name,
-        durationMs: duration,
+        durationMs: attachedDuration,
         sample: false,
         sampleId: undefined,
         transcriptionLanguage: project.sample ? 'korean' : project.transcriptionLanguage ?? 'korean'

@@ -51,6 +51,22 @@ export interface WebProject {
   lastAsrProfile?: AsrProfileId
 }
 
+/** Container and audio decoders can round the same endpoint a few milliseconds apart. */
+export function resolveAttachedMediaDuration(
+  project: Pick<WebProject, 'rows' | 'durationMs'>, observedDurationMs: number
+): number {
+  if (!Number.isSafeInteger(observedDurationMs) || observedDurationMs <= 0 || observedDurationMs > MAX_MEDIA_DURATION_MS)
+    throw new Error('영상 길이는 0초 초과, 3시간 이하여야 합니다.')
+  const extendsPastMedia = project.rows.some(row => row.endMs > observedDurationMs)
+  if (!extendsPastMedia) return observedDurationMs
+  // Preserve existing millisecond cues rather than cropping approved rows on reconnect.
+  const roundingToleranceMs = 10
+  if (Math.abs(project.durationMs - observedDurationMs) <= roundingToleranceMs &&
+    project.rows.every(row => row.endMs <= observedDurationMs + roundingToleranceMs))
+    return Math.max(project.durationMs, observedDurationMs)
+  throw new Error('선택한 영상이 대본의 종료 시간보다 짧습니다. 새 작업을 만들거나 행 시간을 먼저 수정해 주세요.')
+}
+
 const identifierSchema = z.string().trim().min(1).max(200)
 const timeSchema = z.number().int().min(0).max(MAX_MEDIA_DURATION_MS)
 const rowSchema = z
